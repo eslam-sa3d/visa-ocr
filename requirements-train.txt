@@ -1,0 +1,7 @@
+# Only needed on the machine that prepares data and trains models (not in the runtime image).
+pillow>=10.0
+arabic-reshaper>=3.0
+python-bidi>=0.4.2
+# PaddleOCR and PaddlePaddle: install the versions that match your pretrained weights.
+# paddlepaddle
+# paddleocr

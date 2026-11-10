@@ -1,0 +1,15 @@
+# Exact versions tested together (Python 3.12). Build a wheelhouse from this file for the air-gapped host.
+fastapi==0.162.2
+uvicorn[standard]==0.54.0
+pydantic==2.14.3
+python-multipart==0.0.33
+pillow==13.0.0
+pytesseract==0.3.13
+numpy==2.3.5
+opencv-contrib-python-headless==4.10.0.84
+onnxruntime==1.29.0
+rapidocr-onnxruntime==1.2.3   # second reader whose models ship inside the wheel; ensemble engine uses it
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+paddlex==3.7.2
+psycopg[binary]==3.3.8   # PostgreSQL job store (only used when DATABASE_URL is set)

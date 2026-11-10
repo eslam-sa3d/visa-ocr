@@ -1,0 +1,7 @@
+curl -X POST https://ocr.internal.example/v1/documents/extract \
+  -H 'X-Correlation-ID: portal-req-0001' \
+  -F 'files=@data-page.jpg;type=image/jpeg' \
+  -F 'doc_type_hint=passport'
+
+# Poll for the result:
+curl https://ocr.internal.example/v1/jobs/7f3c2a9e1b4d4c6a8e5f0b1d2c3a4b5e

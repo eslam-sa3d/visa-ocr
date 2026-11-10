@@ -1,0 +1,340 @@
+[
+ {
+  "id": "passport_sau",
+  "label": "Passport, Saudi Arabia (synthetic)",
+  "country": "SAU",
+  "kind": "passport",
+  "synthetic": true,
+  "lines": [
+   "P<SAUSPECIMEN<<NORA<SAMPLE<<<<<<<<<<<<<<<<<<",
+   "SP00000012SAU9003152F3106143<<<<<<<<<<<<<<<2"
+  ],
+  "expected": {
+   "format": "TD3",
+   "kind": "passport",
+   "typeCode": "P",
+   "issuingState": "SAU",
+   "issuingStateName": "Saudi Arabia",
+   "surname": "SPECIMEN",
+   "givenNames": "NORA SAMPLE",
+   "documentNumber": "SP0000001",
+   "nationality": "SAU",
+   "nationalityName": "Saudi Arabia",
+   "birthDate": "1990-03-15",
+   "sex": "F",
+   "expiryDate": "2031-06-14",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "optional_data": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "passport_egy",
+  "label": "Passport, Egypt (synthetic)",
+  "country": "EGY",
+  "kind": "passport",
+  "synthetic": true,
+  "lines": [
+   "P<EGYSPECIMEN<<OMAR<TEST<<<<<<<<<<<<<<<<<<<<",
+   "SP00000023EGY8507022M3301281<<<<<<<<<<<<<<<8"
+  ],
+  "expected": {
+   "format": "TD3",
+   "kind": "passport",
+   "typeCode": "P",
+   "issuingState": "EGY",
+   "issuingStateName": "Egypt",
+   "surname": "SPECIMEN",
+   "givenNames": "OMAR TEST",
+   "documentNumber": "SP0000002",
+   "nationality": "EGY",
+   "nationalityName": "Egypt",
+   "birthDate": "1985-07-02",
+   "sex": "M",
+   "expiryDate": "2033-01-28",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "optional_data": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "passport_gbr",
+  "label": "Passport, United Kingdom (synthetic, born 2001)",
+  "country": "GBR",
+  "kind": "passport",
+  "synthetic": true,
+  "lines": [
+   "P<GBRSPECIMEN<<ALEX<JAMES<<<<<<<<<<<<<<<<<<<",
+   "SP00000034GBR0109280M3405112<<<<<<<<<<<<<<<6"
+  ],
+  "expected": {
+   "format": "TD3",
+   "kind": "passport",
+   "typeCode": "P",
+   "issuingState": "GBR",
+   "issuingStateName": "United Kingdom",
+   "surname": "SPECIMEN",
+   "givenNames": "ALEX JAMES",
+   "documentNumber": "SP0000003",
+   "nationality": "GBR",
+   "nationalityName": "United Kingdom",
+   "birthDate": "2001-09-28",
+   "sex": "M",
+   "expiryDate": "2034-05-11",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "optional_data": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "passport_deu",
+  "label": "Passport, Germany (issuer code 'D', optional data, compound surname)",
+  "country": "D",
+  "kind": "passport",
+  "synthetic": true,
+  "lines": [
+   "P<D<<SPECIMEN<MUELLER<<ERIKA<<<<<<<<<<<<<<<<",
+   "SP00000045D<<7811207F3209033ZZ12345<<<<<<<36"
+  ],
+  "expected": {
+   "format": "TD3",
+   "kind": "passport",
+   "typeCode": "P",
+   "issuingState": "D",
+   "issuingStateName": "Germany",
+   "surname": "SPECIMEN MUELLER",
+   "givenNames": "ERIKA",
+   "documentNumber": "SP0000004",
+   "nationality": "D",
+   "nationalityName": "Germany",
+   "birthDate": "1978-11-20",
+   "sex": "F",
+   "expiryDate": "2032-09-03",
+   "optionalData": "ZZ12345",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "optional_data": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "passport_ind",
+  "label": "Passport, India (synthetic)",
+  "country": "IND",
+  "kind": "passport",
+  "synthetic": true,
+  "lines": [
+   "P<INDSPECIMEN<<ASHA<<<<<<<<<<<<<<<<<<<<<<<<<",
+   "SP00000056IND9604216F3503177<<<<<<<<<<<<<<<6"
+  ],
+  "expected": {
+   "format": "TD3",
+   "kind": "passport",
+   "typeCode": "P",
+   "issuingState": "IND",
+   "issuingStateName": "India",
+   "surname": "SPECIMEN",
+   "givenNames": "ASHA",
+   "documentNumber": "SP0000005",
+   "nationality": "IND",
+   "nationalityName": "India",
+   "birthDate": "1996-04-21",
+   "sex": "F",
+   "expiryDate": "2035-03-17",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "optional_data": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "visa_fra",
+  "label": "Schengen visa sticker, France, holder of passport_sau (synthetic)",
+  "country": "FRA",
+  "kind": "visa",
+  "synthetic": true,
+  "lines": [
+   "V<FRASPECIMEN<<NORA<SAMPLE<<<<<<<<<<<<<<<<<<",
+   "VS00000012SAU9003152F2705125<<<<<<<<<<<<<<<<"
+  ],
+  "expected": {
+   "format": "MRVA",
+   "kind": "visa",
+   "typeCode": "V",
+   "issuingState": "FRA",
+   "issuingStateName": "France",
+   "surname": "SPECIMEN",
+   "givenNames": "NORA SAMPLE",
+   "documentNumber": "VS0000001",
+   "nationality": "SAU",
+   "nationalityName": "Saudi Arabia",
+   "birthDate": "1990-03-15",
+   "sex": "F",
+   "expiryDate": "2027-05-12",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "visa_esp",
+  "label": "Schengen visa sticker, Spain, holder of passport_egy (synthetic)",
+  "country": "ESP",
+  "kind": "visa",
+  "synthetic": true,
+  "lines": [
+   "V<ESPSPECIMEN<<OMAR<TEST<<<<<<<<<<<<<<<<<<<<",
+   "VS00000023EGY8507022M2709307<<<<<<<<<<<<<<<<"
+  ],
+  "expected": {
+   "format": "MRVA",
+   "kind": "visa",
+   "typeCode": "V",
+   "issuingState": "ESP",
+   "issuingStateName": "Spain",
+   "surname": "SPECIMEN",
+   "givenNames": "OMAR TEST",
+   "documentNumber": "VS0000002",
+   "nationality": "EGY",
+   "nationalityName": "Egypt",
+   "birthDate": "1985-07-02",
+   "sex": "M",
+   "expiryDate": "2027-09-30",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "greencard_usa",
+  "label": "US permanent resident card, back MRZ (TD1, 13-character receipt number)",
+  "country": "USA",
+  "kind": "id_card",
+  "synthetic": true,
+  "lines": [
+   "C1USASRC000000<00016<<<<<<<<<<",
+   "8808109M3310159IND<<<<<<<<<<<0",
+   "SPECIMEN<<RAVI<TEST<<<<<<<<<<<"
+  ],
+  "expected": {
+   "format": "TD1",
+   "kind": "id_card",
+   "typeCode": "C1",
+   "issuingState": "USA",
+   "issuingStateName": "United States",
+   "surname": "SPECIMEN",
+   "givenNames": "RAVI TEST",
+   "documentNumber": "SRC0000000001",
+   "nationality": "IND",
+   "nationalityName": "India",
+   "birthDate": "1988-08-10",
+   "sex": "M",
+   "expiryDate": "2033-10-15",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ },
+ {
+  "id": "idcard_are",
+  "label": "National ID card, TD1 MRZ, issuing state ARE (synthetic)",
+  "country": "ARE",
+  "kind": "id_card",
+  "synthetic": true,
+  "lines": [
+   "I<ARESP00000115<<<<<<<<<<<<<<<",
+   "9202058F2911308ARE<<<<<<<<<<<2",
+   "SPECIMEN<<LAYLA<SAMPLE<<<<<<<<"
+  ],
+  "expected": {
+   "format": "TD1",
+   "kind": "id_card",
+   "typeCode": "I",
+   "issuingState": "ARE",
+   "issuingStateName": "United Arab Emirates",
+   "surname": "SPECIMEN",
+   "givenNames": "LAYLA SAMPLE",
+   "documentNumber": "SP0000011",
+   "nationality": "ARE",
+   "nationalityName": "United Arab Emirates",
+   "birthDate": "1992-02-05",
+   "sex": "F",
+   "expiryDate": "2029-11-30",
+   "optionalData": "",
+   "optionalData2": "",
+   "checks": {
+    "document_number": true,
+    "birth_date": true,
+    "expiry_date": true,
+    "composite": true
+   },
+   "correctedFields": [],
+   "repairedFields": [],
+   "valid": true
+  }
+ }
+]

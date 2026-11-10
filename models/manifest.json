@@ -1,0 +1,40 @@
+{
+  "models": [
+    {
+      "id": "PP-OCRv5_mobile_det",
+      "task": "text_detection",
+      "lang": "any",
+      "version": "pretrained",
+      "path": "PP-OCRv5_mobile_det",
+      "arch": "PP-OCRv5_mobile_det",
+      "sha256": null,
+      "active": true,
+      "source": "PaddleOCR pretrained (copy the folder here from a connected machine, then register it)",
+      "metrics": {}
+    },
+    {
+      "id": "en_PP-OCRv5_mobile_rec",
+      "task": "text_recognition",
+      "lang": "en",
+      "version": "pretrained",
+      "path": "en_PP-OCRv5_mobile_rec",
+      "arch": "en_PP-OCRv5_mobile_rec",
+      "sha256": null,
+      "active": true,
+      "source": "PaddleOCR pretrained English recognizer",
+      "metrics": {}
+    },
+    {
+      "id": "arabic_PP-OCRv5_mobile_rec",
+      "task": "text_recognition",
+      "lang": "ar",
+      "version": "pretrained",
+      "path": "arabic_PP-OCRv5_mobile_rec",
+      "arch": "arabic_PP-OCRv5_mobile_rec",
+      "sha256": null,
+      "active": true,
+      "source": "PaddleOCR pretrained Arabic recognizer (also covers English letters)",
+      "metrics": {}
+    }
+  ]
+}

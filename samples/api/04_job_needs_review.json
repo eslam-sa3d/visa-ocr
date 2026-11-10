@@ -1,0 +1,50 @@
+{
+  "jobId": "7f3c2a9e1b4d4c6a8e5f0b1d2c3a4b5e",
+  "correlationId": "portal-req-0001",
+  "status": "done",
+  "createdAt": "2026-11-09T09:52:14.512345+00:00",
+  "result": {
+    "document": {
+      "format": "TD3",
+      "kind": "passport",
+      "typeCode": "P",
+      "issuingState": "SAU",
+      "issuingStateName": "Saudi Arabia",
+      "surname": "SPECIMEN",
+      "givenNames": "NORA SAMPLE",
+      "documentNumber": "TP0000001",
+      "nationality": "SAU",
+      "nationalityName": "Saudi Arabia",
+      "birthDate": "1990-03-15",
+      "sex": "F",
+      "expiryDate": "2031-06-14",
+      "optionalData": "",
+      "optionalData2": "",
+      "checks": {
+        "document_number": false,
+        "birth_date": true,
+        "expiry_date": true,
+        "optional_data": true,
+        "composite": false
+      },
+      "correctedFields": [],
+      "valid": false
+    },
+    "flags": [
+      {
+        "code": "mrz_checksum_failed",
+        "severity": "error",
+        "message": "Check digit failed: document_number"
+      },
+      {
+        "code": "mrz_checksum_failed",
+        "severity": "error",
+        "message": "Check digit failed: composite"
+      }
+    ],
+    "needsReview": true,
+    "engine": "tesseract-mrz",
+    "fields": {}
+  },
+  "error": null
+}

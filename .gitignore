@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.coverage
+.mypy_cache/
+.pytest_cache/
+real-samples/
+photos/
+*.tgz
+models/*
+!models/manifest.json

@@ -1,0 +1,43 @@
+# Training the English / Arabic text model
+
+The service ships a **paddle-ocr** engine (set `OCR_ENGINE=paddle-ocr`) that reads English and Arabic text lines
+from local model files only. It never downloads anything. Models are tracked in `models/manifest.json`
+(`GET /v1/models` lists them with a checksum status).
+
+## Status: what is and is not verified
+- Verified by tests: registry and checksums, the engine wiring (with a fake PaddleOCR), consent-gated corrections,
+  dataset building, CER evaluation, and the "only activate if CER improves" rule.
+- Verified end to end (PaddleOCR main + paddlepaddle 3.3.1, CPU, tiny run): corrections API -> `prepare_dataset.py` ->
+  PaddleOCR `tools/train.py` -> `export_model.py` -> `predict_lines.py` -> `evaluate.py` -> `register_model.py` -> the
+  engine loads the exported model. This run used **random initial weights and 2 epochs**, so the model was useless
+  (CER 2.6); it proves the plumbing and config keys, not model quality.
+- NOT verified: fine-tuning from the real pretrained weights (their download hosts were blocked in the test environment;
+  get the `*_pretrained.pdparams` for your model from the PaddleOCR docs on a connected machine), accuracy gains, GPU runs.
+- Bug found and fixed in this run: the activation safeguard let a new model replace one that had no recorded CER.
+  Now record the baseline first: evaluate it on the same real validation file, then
+  `register_model.py --set-metrics <baseline id> --metrics baseline.json`.
+- Visual-zone field mapping (name, dates, ID number from Arabic text) is not built. Today the engine returns
+  text lines; the MRZ stays the source of structured fields.
+
+## Workflow
+1. **Get pretrained models** on an internet-connected machine (PP-OCRv5 mobile detection, English and Arabic
+   recognition). Copy the folders into `models/` and fill in `path` in `manifest.json`.
+2. **Register** them: `python training/register_model.py ...` computes the sha256. The engine refuses missing
+   or mismatched models.
+3. **Collect data.** Upload with `consent_training=true` and `TRAINING_STORE_DIR` set. A reviewer then posts line
+   boxes and text to `POST /v1/jobs/{id}/corrections`. Without consent or without the store, the call returns 409.
+   Alternatively label with PPOCRLabel.
+4. **Build the dataset**: `training/prepare_dataset.py` (splits by document, caps synthetic data at 3x real,
+   warns about characters outside the dictionary). Synthetic Arabic lines come from `training/synth_lines.py`
+   (needs an Arabic-capable font; labels are kept in logical order).
+5. **Fine-tune** with `training/finetune.sh` (set `EVAL_STEP` low for small datasets, otherwise no best checkpoint is saved) on a GPU server (PaddlePaddle has no Metal GPU support as far as I
+   know, so a Mac would be CPU-only and slow). Aim for at least 5,000 labelled lines when you keep the dictionary.
+6. **Evaluate on real validation lines only**: `training/predict_lines.py` then `training/evaluate.py`
+   (CER, exact match, split by script; `--normalize-arabic`, `--ascii-digits`).
+7. **Activate** with `register_model.py --activate`; it refuses unless CER beats the active model (`--force` overrides).
+
+## Privacy
+Images are stored only with explicit per-upload consent, with 0700/0600 permissions. The service
+deletes training folders older than `TRAINING_RETENTION_DAYS` (default 30; 0 turns this off) in a background sweep.
+For a consent withdrawal or a cron job use `python tools/purge_training.py --store-dir <dir> --job-id <id>` or `--days N`. Keep the training store off the
+internet-facing host.
