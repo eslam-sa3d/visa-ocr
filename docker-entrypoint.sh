@@ -10,7 +10,16 @@ if [ -z "${API_KEYS:-}" ] && [ -z "${API_KEY_SHA256:-}" ] && [ "${ALLOW_ANONYMOU
 fi
 CERT="${TLS_CERT:-/data/tls/server.crt}"
 KEY="${TLS_KEY:-/data/tls/server.key}"
-if [ ! -s "$CERT" ] || [ ! -s "$KEY" ]; then
+# Docker creates an empty DIRECTORY when you bind-mount a host path that does not exist (-v /host/server.crt:/data/tls/server.crt).
+# A directory passes a size test but cannot be loaded as a certificate, so say what is wrong instead of crashing in uvicorn.
+for f in "$CERT" "$KEY"; do
+  if [ -d "$f" ]; then
+    echo "ERROR: $f is a directory, not a file. The host path you mounted there does not exist (Docker created a folder)." >&2
+    echo "       Check the -v path, or mount the folder holding server.crt and server.key (-v /secure/tls:/data/tls:ro)." >&2
+    exit 1
+  fi
+done
+if [ ! -f "$CERT" ] || [ ! -s "$CERT" ] || [ ! -f "$KEY" ] || [ ! -s "$KEY" ]; then
   echo "WARNING: no TLS certificate at $CERT: generating a self-signed one (test only)" >&2
   mkdir -p "$(dirname "$CERT")"
   openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=${TLS_CN:-localhost}" \
