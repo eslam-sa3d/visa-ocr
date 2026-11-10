@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "bad_type",
+    "message": "Only JPEG and PNG are accepted"
+  }
+}

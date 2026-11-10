@@ -1,0 +1,18 @@
+{
+  "status": "PROPOSED - not yet agreed with the business owner (checklist E2). Change here, nothing else.",
+  "synthetic": {
+    "min_fully_correct": 0.80,
+    "max_not_read": 0.03,
+    "max_silent_wrong": 0,
+    "note": "used by CI on generated documents; a regression guard, not an accuracy claim"
+  },
+  "real_specimens": {
+    "min_fully_correct_per_family": 0.95,
+    "max_silent_wrong": 0,
+    "min_iqama_key_fields": 0.90,
+    "max_median_seconds": 10,
+    "min_specimens_per_family": 30,
+    "max_accepted_without_review_error": 0.01,
+    "note": "go-live bar: measured on real documents only (tools/run_scenarios.py --real-dir)"
+  }
+}

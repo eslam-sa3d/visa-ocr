@@ -1,0 +1,867 @@
+[
+ {
+  "id": "passport_sau__clean",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.1,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_sau__rot+4",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.1,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_sau__rot-3",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.8,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_sau__blur",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.7,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_sau__noise",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.9,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_egy__clean",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "clean",
+  "verdict": "PARTIAL",
+  "notes": [
+   "givenNames: expected 'OMAR TEST', got 'OMAR TESI'"
+  ],
+  "seconds": 1.7,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_egy__rot+4",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot+4",
+  "verdict": "PARTIAL",
+  "notes": [
+   "givenNames: expected 'OMAR TEST', got 'OMAR TESI'"
+  ],
+  "seconds": 3.9,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_egy__rot-3",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 5.8,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_egy__blur",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.9,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_egy__noise",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.3,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_gbr__clean",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.5,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_gbr__rot+4",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.7,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_gbr__rot-3",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.3,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_gbr__blur",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.1,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_gbr__noise",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.8,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_deu__clean",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.6,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_deu__rot+4",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.8,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_deu__rot-3",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.1,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_deu__blur",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.5,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_deu__noise",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.8,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_ind__clean",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.0,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "passport_ind__rot+4",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 6.1,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_ind__rot-3",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 5.8,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_ind__blur",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 11.5,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "passport_ind__noise",
+  "group": "mrz",
+  "docType": "passport:TD3",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.5,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_fra__clean",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.6,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_fra__rot+4",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.0,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_fra__rot-3",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.4,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_fra__blur",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.7,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_fra__noise",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.1,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_esp__clean",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.7,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_esp__rot+4",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 5.5,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_esp__rot-3",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 6.0,
+  "engine": "ensemble",
+  "flags": [
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_esp__blur",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.9,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_esp__noise",
+  "group": "mrz",
+  "docType": "visa:MRVA",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.2,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "greencard_usa__clean",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "clean",
+  "verdict": "PARTIAL",
+  "notes": [
+   "documentNumber: expected 'SRC0000000001', got 'SRC000000000L'"
+  ],
+  "seconds": 15.5,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "ocr_digits_corrected",
+   "mrz_field_repaired",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "greencard_usa__rot+4",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 16.1,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "greencard_usa__rot-3",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "rot-3",
+  "verdict": "PARTIAL",
+  "notes": [
+   "documentNumber: expected 'SRC0000000001', got 'SRCOO00000001'",
+   "givenNames: expected 'RAVI TEST', got 'RAVI TEST SSSBS'"
+  ],
+  "seconds": 15.3,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "greencard_usa__blur",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 11.7,
+  "engine": "ensemble",
+  "flags": [
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "greencard_usa__noise",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 11.1,
+  "engine": "ensemble",
+  "flags": [
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "idcard_are__clean",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.0,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "idcard_are__rot+4",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.6,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "idcard_are__rot-3",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.9,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "idcard_are__blur",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 2.5,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "idcard_are__noise",
+  "group": "mrz",
+  "docType": "id_card:TD1",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.9,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "idcard_td2_egy__clean",
+  "group": "mrz",
+  "docType": "id_card:TD2",
+  "variant": "clean",
+  "verdict": "PARTIAL",
+  "notes": [
+   "givenNames: expected 'AHMED TEST', got 'AHMED TESI'"
+  ],
+  "seconds": 14.5,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "idcard_td2_egy__rot+4",
+  "group": "mrz",
+  "docType": "id_card:TD2",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 15.2,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "idcard_td2_egy__rot-3",
+  "group": "mrz",
+  "docType": "id_card:TD2",
+  "variant": "rot-3",
+  "verdict": "PARTIAL",
+  "notes": [
+   "documentNumber: expected 'A1234567', got '41234567'",
+   "surname: expected 'SPECIMEN', got 'PECIMEN'"
+  ],
+  "seconds": 15.5,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "ocr_digits_corrected",
+   "issuing_code_unknown",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "idcard_td2_egy__blur",
+  "group": "mrz",
+  "docType": "id_card:TD2",
+  "variant": "blur",
+  "verdict": "PARTIAL",
+  "notes": [
+   "givenNames: expected 'AHMED TEST', got 'AHMED TESI'"
+  ],
+  "seconds": 14.5,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "idcard_td2_egy__noise",
+  "group": "mrz",
+  "docType": "id_card:TD2",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 15.6,
+  "engine": "ensemble",
+  "flags": [
+   "mrz_checksum_failed",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_mrvb_deu__clean",
+  "group": "mrz",
+  "docType": "visa:MRVB",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.5,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_mrvb_deu__rot+4",
+  "group": "mrz",
+  "docType": "visa:MRVB",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.5,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_mrvb_deu__rot-3",
+  "group": "mrz",
+  "docType": "visa:MRVB",
+  "variant": "rot-3",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.1,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "visa_mrvb_deu__blur",
+  "group": "mrz",
+  "docType": "visa:MRVB",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.5,
+  "engine": "ensemble",
+  "flags": [],
+  "needsReview": false
+ },
+ {
+  "id": "visa_mrvb_deu__noise",
+  "group": "mrz",
+  "docType": "visa:MRVB",
+  "variant": "noise",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 1.5,
+  "engine": "ensemble",
+  "flags": [
+   "ocr_digits_corrected",
+   "document_number_ambiguous_characters",
+   "unprotected_fields_unverified"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_1__clean",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.0,
+  "engine": "ensemble",
+  "flags": [
+   "expiry_label_guessed",
+   "low_confidence_fields",
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_1__rot+4",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "rot+4",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.2,
+  "engine": "ensemble",
+  "flags": [
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_1__blur",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 4.1,
+  "engine": "ensemble",
+  "flags": [
+   "low_confidence_fields",
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_2__clean",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "clean",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.8,
+  "engine": "ensemble",
+  "flags": [
+   "expiry_label_guessed",
+   "low_confidence_fields",
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_2__rot+4",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "rot+4",
+  "verdict": "PARTIAL",
+  "notes": [
+   "idNumber: expected '2456789011', got None",
+   "nameEn: expected 'MARIAM NOOR SAEED', got None",
+   "nameAr: expected 'مريم نور سعيد', got None"
+  ],
+  "seconds": 4.1,
+  "engine": "ensemble",
+  "flags": [
+   "id_number_not_found",
+   "low_confidence_fields",
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ },
+ {
+  "id": "iqama_2__blur",
+  "group": "visual",
+  "docType": "iqama:visual",
+  "variant": "blur",
+  "verdict": "PASS",
+  "notes": [],
+  "seconds": 3.9,
+  "engine": "ensemble",
+  "flags": [
+   "visual_zone_only"
+  ],
+  "needsReview": true
+ }
+]

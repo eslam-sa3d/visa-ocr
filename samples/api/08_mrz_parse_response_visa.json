@@ -1,0 +1,28 @@
+{
+  "document": {
+    "format": "MRVA",
+    "kind": "visa",
+    "typeCode": "V",
+    "issuingState": "FRA",
+    "issuingStateName": "France",
+    "surname": "SPECIMEN",
+    "givenNames": "NORA SAMPLE",
+    "documentNumber": "VS0000001",
+    "nationality": "SAU",
+    "nationalityName": "Saudi Arabia",
+    "birthDate": "1990-03-15",
+    "sex": "F",
+    "expiryDate": "2027-05-12",
+    "optionalData": "",
+    "optionalData2": "",
+    "checks": {
+      "document_number": true,
+      "birth_date": true,
+      "expiry_date": true
+    },
+    "correctedFields": [],
+    "valid": true
+  },
+  "flags": [],
+  "needsReview": false
+}

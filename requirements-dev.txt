@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1
+requests==2.34.2
+pyflakes==4.1.0
+arabic-reshaper>=3.0
+python-bidi==0.6.12

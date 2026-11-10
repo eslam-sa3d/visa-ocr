@@ -1,0 +1,23 @@
+{
+ "idNumber": [
+  "رقم البطاقة",
+  "card number",
+  "civil id",
+  "الرقم المدني",
+  "الرقم الشخصي",
+  "personal number",
+  "identity card number"
+ ],
+ "nationality": [
+  "nationality / الجنسية"
+ ],
+ "birthDate": [
+  "تاريخ الولادة",
+  "date of birth"
+ ],
+ "expiryDate": [
+  "تاريخ انتهاء البطاقة",
+  "card expiry",
+  "expiry date"
+ ]
+}
