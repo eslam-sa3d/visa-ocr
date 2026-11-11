@@ -183,7 +183,7 @@ def test_look_alike_in_optional_data_does_not_block_the_other_fields():
     assert res["document"]["optionalData"] == "6901317"                      # the digit fits a field of digits
     by = {f["code"]: f["severity"] for f in res["flags"]}
     assert by == {"optional_data_unconfirmed": "warning"}
-    assert res["fieldStatus"]["optionalData"] == "unverified" and res["fieldStatus"]["names"] == "ocr confident"
+    assert res["fieldStatus"]["optionalData"] == "unverified" and res["fieldStatus"]["names"] == "both readers agree"
     assert res["readers"]["differences"] == [{"line": 2, "position": 29, "tesseract": "6", "rapidocr": "G"}]
 
 
@@ -272,3 +272,46 @@ def test_field_by_field_agreement_and_the_cleaner_name_line_wins():
     flags = {f["code"]: f["message"] for f in res["flags"]}
     assert "document_number_ambiguous_characters" not in flags
     assert "names" in flags["unprotected_fields_unverified"] and "nationality" not in flags["unprotected_fields_unverified"]
+
+
+# ---- one reader fails, the other reads the MRZ and the printed page (real case, small scan, 11 Nov 2026)
+class _StubPage(_Stub):
+    def __init__(self, lines, page):
+        self.lines, self.page = lines, page
+
+    def extract(self, images, hint):
+        from app.engines.base import EngineOutput
+        return EngineOutput(engine="stub", mrz_lines=self.lines, fields={"textLines": [{"text": t, "score": 0.8} for t in self.page]})
+
+
+def _one_good_reader(page, number="KB3912527"):
+    from app import pipeline
+    from app.review import Applicant
+    good = _td3_with_optional("6901317", number)
+    e = _ensemble([good[0], "F" + good[1][:-1]], None)            # the first reader's line 2 fails every check
+    e.rapid = _StubPage(good, page)
+    return pipeline.run([b""], None, Applicant(), e)[1]
+
+
+def test_printed_page_confirms_fields_when_only_one_reader_is_valid():
+    res = _one_good_reader(["UTO", "ERIKSSON,ANNAMARIA", "女/M", "02APR1988", "KB3912527"])
+    fs = res["fieldStatus"]
+    assert fs["names"] == fs["nationality"] == fs["sex"] == fs["issuingState"] == "confirmed by printed page"
+    assert fs["documentType"] == "fixed by the document format"
+    assert res["needsReview"] is False and not [f for f in res["flags"] if f["severity"] == "error"]
+    assert "textLines" not in res["fields"]                       # page text stays inside the service
+
+
+def test_ambiguous_number_not_found_on_the_page_still_needs_review():
+    res = _one_good_reader(["UTO", "ERIKSSON,ANNAMARIA", "M"])
+    assert res["needsReview"] is True
+    assert [f["code"] for f in res["flags"] if f["severity"] == "error"] == ["document_number_ambiguous_characters"]
+
+
+def test_page_that_disagrees_or_is_silent_confirms_nothing():
+    res = _one_good_reader(["XXX", "ERIKSSON,ANNAMARLA", "F", "KB3912527"])
+    fs = res["fieldStatus"]
+    assert fs["sex"] == fs["issuingState"] == fs["nationality"] == "unverified" and res["needsReview"] is True
+    assert "name_differs_from_visual_zone" in {f["code"] for f in res["flags"]}
+    res = _one_good_reader(["M", "F", "UTO"])                     # both sex letters on the page: no evidence for either
+    assert res["fieldStatus"]["sex"] == "unverified"

@@ -83,6 +83,8 @@ class RapidOcrEngine:
         hard = budget * 3
         best, best_conf, best_score, best_fields = None, None, -2, {}
         lone = None        # a passport line 2 read on its own, when no complete MRZ was found
+        page_text: list[dict] = []
+        seen_text: set[str] = set()
         with self._lock:
             for index, raw in enumerate(images):
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
@@ -131,6 +133,12 @@ class RapidOcrEngine:
                         t0 = time.monotonic()
                         texts, scores = self._read(reader, part, np)
                         last_cost, last_area = time.monotonic() - t0, part.width * part.height
+                        # Page text from every attempt on this image: the MRZ is often read from the enlarged bottom strip, which
+                        # does not contain the printed name.
+                        for tx, sc in zip(texts, scores):
+                            if "<" not in tx and tx not in seen_text and len(page_text) < 120:
+                                seen_text.add(tx)
+                                page_text.append({"text": tx, "score": round(float(sc), 3)})
                         lines = find_mrz_lines(texts)
                         if not lines:
                             lone = lone or lone_passport_line2(texts)
@@ -142,10 +150,13 @@ class RapidOcrEngine:
                             # boxes are only exact on the unrotated page
                             boxes = self._line_boxes(lines, texts, index, part.width / native_width, y_off) if angle == 0 else None
                             best_fields = {"mrzLineBoxes": boxes} if boxes else {}
+                            # The rest of the page as this reader saw it (name, country code, sex as printed): the review rules
+                            # compare it with the MRZ. Personal data: it leaves the service only when INCLUDE_TEXT_LINES is set.
+                            best_fields["textLines"] = page_text
                         if perfect:
                             return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf, fields=best_fields)
                     if deadline and not ran:
                         out_of_time = True                 # nothing fits any more: stop trying other angles
         if best is None and lone:
-            best_fields = {"mrzLine2": lone}
+            best_fields = {"mrzLine2": lone, "textLines": page_text}
         return EngineOutput(engine=self.name, mrz_lines=best, mrz_confidence=best_conf, fields=best_fields)
