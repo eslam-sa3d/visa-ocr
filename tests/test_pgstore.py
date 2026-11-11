@@ -61,15 +61,20 @@ def test_unsubmitted_job_is_not_claimed(store):
 
 
 def test_dead_worker_job_is_retried_then_failed(store, monkeypatch):
-    monkeypatch.setenv("JOB_STALE_SECONDS", "0")
     monkeypatch.setenv("JOB_MAX_ATTEMPTS", "2")
+
+    def age():                                             # the claim was not renewed for longer than JOB_STALE_SECONDS
+        with store._conn() as c:
+            c.execute("UPDATE jobs SET locked_ts = locked_ts - 10000 WHERE id=%s", (j.id,))
+
     j = store.create("c", "o")
     store.submit(j.id, [b"x"], None, {})
     assert store.claim()[0] == j.id                        # worker 1 dies without finishing
-    time.sleep(0.05)
+    assert store.requeue_stale() == 0                      # a fresh claim is not stale
+    age()
     assert store.requeue_stale() == 1 and store.get(j.id).status == "queued"
     assert store.claim()[0] == j.id                        # worker 2 also dies
-    time.sleep(0.05)
+    age()
     store.requeue_stale()
     got = store.get(j.id)
     assert got.status == "failed" and got.error["code"] == "internal_error"

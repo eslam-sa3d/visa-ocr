@@ -246,9 +246,11 @@ def _tidy_names(line: str, start: int, line_no: int, st: _State) -> str:
     field_ = line[start:]
     # A long filler run read as letters ("JIANG" + "<" * 20 -> "JLANGKSSKKKKKKKKKK"): letters that look like "<" and fill the whole
     # tail are fillers. Only runs of 6 or more such letters at the end of the name field are treated this way.
-    m = re.search(r"[KSECLXI]{6,}<*$", field_)
-    if m and not set(m[0]) <= {FILLER}:
-        st.corrected.append(f"line{line_no}[{start + m.start()}..]:filler read as letters removed")
+    # A real name is followed by fillers; a misread filler run reaches the very end of the line. So a run that is followed by
+    # '<' is left alone (LESLIE, GISELLE, CECILE are names), and a removal is always reported for a person to confirm.
+    m = re.search(r"[KSECLXI]{6,}$", field_)
+    if m:
+        st.corrected.append(f"line{line_no}[{start + m.start()}..]:filler read as letters removed ({m[0][:12]})")
         line = line[:start + m.start()] + FILLER * (len(field_) - m.start())
         field_ = line[start:]
     i = field_.find("<<<")
@@ -466,6 +468,25 @@ def _fit_length(line: str, size: int, max_diff: int = 3) -> str | None:
     if new_len < 1:
         return None
     return line[: run.start()] + "<" * new_len + line[run.end():]
+
+
+def lines_confidence(lines: list[str] | None, texts: list[str], scores: list) -> float | None:
+    """Lowest OCR score over the detected texts that the returned MRZ lines came from. None when any returned line has no
+    detected text that reads exactly the same (a line whose filler run was padded or adjusted was partly made up, so no score
+    speaks for it), or when a score is missing."""
+    if not lines:
+        return None
+    by_text: dict[str, float] = {}
+    for t, s in zip(texts, scores):
+        if s is None:
+            continue
+        c = clean_line(str(t))
+        if c:
+            by_text[c] = min(float(s), by_text.get(c, 1.0))
+    used = [by_text.get(l) for l in lines]
+    if any(u is None for u in used):
+        return None
+    return round(min(used), 4)
 
 
 def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:

@@ -56,6 +56,12 @@ def _valid_date(s: str | None) -> bool:
         return False
 
 
+def _clip(s: str, n: int = 40) -> str:
+    """Caller text for a message: printable characters only, and short. Messages are stored with the result."""
+    s = "".join(c if c.isprintable() else "?" for c in str(s))
+    return s if len(s) <= n else s[:n] + "..."
+
+
 def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict[str, bool]]:
     """Compare form data with the document. Returns (flags, which unprotected groups the form confirms)."""
     flags: list[Flag] = []
@@ -67,7 +73,7 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
     if applicant.document_number:
         if re.sub(r"[^A-Z0-9]", "", applicant.document_number.upper()) != re.sub(r"[^A-Z0-9]", "", doc_number.upper()):
             flags.append(Flag("applicant_document_number_mismatch", "error",
-                              f"Form says document number {applicant.document_number!r}, document says {doc_number!r}"))
+                              f"Form says document number '{_clip(applicant.document_number)}', document says '{_clip(doc_number)}'"))
     for label, given, found in (("birth date", applicant.birth_date, doc.get("birthDate")),
                                 ("expiry date", applicant.expiry_date, doc.get("expiryDate"))):
         if given:
@@ -95,12 +101,13 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
             verified["names"] = True
         else:
             flags.append(Flag("applicant_name_mismatch", "error",
-                              f"Form name {' '.join(a_tokens)!r} does not match the document name {' '.join(d_tokens)!r}"))
+                              f"Form name '{_clip(' '.join(a_tokens), 120)}' does not match the document name "
+                              f"'{_clip(' '.join(d_tokens), 120)}'"))
     return flags, verified
 
 
 def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: list[dict] | None,
-                     applicant: Applicant) -> None:
+                     applicant: Applicant, mrz_lines: list[str] | None = None) -> None:
     """Add review flags to a parsed MRZ result (mutates it)."""
     doc = result["document"]
     flags: list[Flag] = []
@@ -108,7 +115,10 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     a_flags, verified = compare_applicant(doc, applicant)
     flags += a_flags
 
-    v_status, printed = visual_name_status(doc.get("surname", ""), doc.get("givenNames", ""), text_lines or [])
+    # A name is cut only when it does not fit: the MRZ name line (line 1; line 3 on a three-line card) then has no filler at its end.
+    name_line = (mrz_lines[2] if len(mrz_lines) == 3 else mrz_lines[0]) if mrz_lines else ""
+    v_status, printed = visual_name_status(doc.get("surname", ""), doc.get("givenNames", ""), text_lines or [],
+                                           name_field_full=bool(name_line) and not name_line.endswith("<"))
     if v_status == "mismatch":
         flags.append(Flag("name_differs_from_visual_zone", "error",
                           f"MRZ name '{doc.get('surname', '')} {doc.get('givenNames', '')}' differs from the name printed on "

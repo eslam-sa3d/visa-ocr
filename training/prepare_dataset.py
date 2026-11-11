@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import shutil
 import sys
@@ -115,6 +116,7 @@ def write(path: Path, samples: list[dict]) -> None:
 
 
 def main() -> None:
+    os.umask(0o077)      # line crops and labels are personal data: owner-only, like the training store
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--store-dir", type=Path, help="TRAINING_STORE_DIR with reviewer corrections")
     ap.add_argument("--ppocrlabel-dir", type=Path, nargs="*", default=[])

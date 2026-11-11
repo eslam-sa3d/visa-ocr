@@ -12,7 +12,7 @@ import threading
 import time
 
 from .. import config as app_config
-from ..mrz import MrzError, find_mrz_lines, parse_mrz
+from ..mrz import MrzError, find_mrz_lines, lines_confidence, parse_mrz
 from ..uploads import upscaled_size
 from .base import EngineOutput, EngineUnavailable
 from .tesseract_mrz import _estimate_tilt
@@ -129,11 +129,10 @@ class RapidOcrEngine:
                         lines = find_mrz_lines(texts)
                         if not lines:
                             continue
-                        used = [s for t, s in zip(texts, scores) if len(t) >= 25 and re.fullmatch(r"[A-Z0-9<]+", t)]
                         score, perfect = self._score(lines)
                         if score > best_score:
                             best, best_score = lines, score
-                            best_conf = round(min(used), 4) if used else None
+                            best_conf = lines_confidence(lines, texts, scores)   # every line used, not only the long ones
                             # boxes are only exact on the unrotated page
                             boxes = self._line_boxes(lines, texts, index, part.width / native_width, y_off) if angle == 0 else None
                             best_fields = {"mrzLineBoxes": boxes} if boxes else {}

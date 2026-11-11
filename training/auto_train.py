@@ -61,9 +61,27 @@ def score(labels: Path, image_dir: Path, arch: str, model_dir: Path, out_dir: Pa
 
 
 def cycle(args, runner=run_step, now: datetime | None = None) -> dict:
+    """One retraining cycle. Line crops, label files and predictions are personal data taken from the training store, so they
+    are removed when the cycle ends, however it ends, and run folders older than --keep-days are deleted."""
     now = now or datetime.now(timezone.utc)
     work: Path = args.work_dir
-    work.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    keep = float(getattr(args, "keep_days", 30) or 0)
+    if keep > 0:
+        for old in work.iterdir():
+            if old.is_dir() and now.timestamp() - old.stat().st_mtime > keep * 86400:
+                shutil.rmtree(old, ignore_errors=True)
+    run_dir = work / now.strftime("%Y%m%d-%H%M")
+    try:
+        return _cycle(args, runner, now, work)
+    finally:
+        shutil.rmtree(run_dir / "data", ignore_errors=True)
+        if run_dir.is_dir():
+            for preds in run_dir.glob("preds_*.txt"):
+                preds.unlink(missing_ok=True)
+
+
+def _cycle(args, runner, now: datetime, work: Path) -> dict:
     state_file = work / "state.json"
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {"trainedLines": 0}
     report: dict = {"startedAt": now.isoformat(), "lang": args.lang}
@@ -75,6 +93,9 @@ def cycle(args, runner=run_step, now: datetime | None = None) -> dict:
         return report
 
     lines = count_corrections(args.store_dir)
+    if lines < state["trainedLines"]:           # the retention purge removed lines: count new ones from the present total
+        state["trainedLines"] = lines
+        state_file.write_text(json.dumps(state) + "\n", encoding="utf-8")
     report["correctedLines"], report["newLines"] = lines, lines - state["trainedLines"]
     if report["newLines"] < args.min_new:
         return finish("skipped_not_enough_new_lines", needed=args.min_new)
@@ -145,9 +166,13 @@ def main() -> None:
     ap.add_argument("--min-val", type=int, default=200, help="real validation lines needed to judge a model")
     ap.add_argument("--min-gain", type=float, default=0.002, help="CER must drop by at least this much")
     ap.add_argument("--activate", action="store_true", help="switch to the new model automatically when it is better")
+    ap.add_argument("--keep-days", type=float, default=30,
+                    help="delete run folders older than this (match TRAINING_RETENTION_DAYS; 0 keeps them)")
     args = ap.parse_args()
 
+    os.umask(0o077)      # run folders, reports and everything the child steps write are owner-only, like the training store
     args.work_dir.mkdir(parents=True, exist_ok=True)
+    args.work_dir.chmod(0o700)
     lock = args.work_dir / "auto_train.lock"
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)

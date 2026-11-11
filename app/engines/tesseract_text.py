@@ -6,12 +6,32 @@ from __future__ import annotations
 
 import io
 import os
+import time
 from collections import defaultdict
 
 from .. import config as app_config
 from ..textutil import script_of, to_ascii_digits
 from ..uploads import upscaled_size
 from .base import EngineUnavailable
+
+
+MAX_REREADS = 6      # weak lines re-read per page reading
+MAX_ID_ROWS = 3      # rows re-read with digits only
+MAX_STRIPS = 3       # name strips / dropped-row bands read on their own
+
+
+class _Budget:
+    """Time allowed for one read_text_lines call. The number of text rows on a page is not bounded, so every extra Tesseract
+    call (a separate process) is counted against this: OCR_DEADLINE_SECONDS when set, otherwise OCR_TEXT_SECONDS (20)."""
+
+    def __init__(self) -> None:
+        self.end = time.monotonic() + (app_config.ocr_deadline() or app_config.text_read_seconds())
+
+    def left(self) -> bool:
+        return time.monotonic() < self.end
+
+    def call_timeout(self) -> float:
+        return max(1.0, min(app_config.ocr_timeout(), self.end - time.monotonic() + 1.0))
 
 
 def available_langs() -> set[str]:
@@ -34,20 +54,23 @@ def read_text_lines(images: list[bytes], langs: str | None = None) -> list[dict]
     if not wanted:
         raise EngineUnavailable("Tesseract has none of the requested languages: " + langs)
     lines: list[dict] = []
+    budget = _Budget()
     for index, raw in enumerate(images):
+        if index and not budget.left():
+            break                                   # out of time: later images are not read
         base = ImageOps.autocontrast(ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("L"))
-        page = _read_page(base, 2000, index, pytesseract, "+".join(wanted), Image)
+        page = _read_page(base, 2000, index, pytesseract, "+".join(wanted), Image, budget)
         # A second reading at another scale: some lines read cleanly at one scale and not at the other. Per row, the more
         # confident reading wins, and a row only one scale found is kept.
-        alt = _read_page(base, 1300, index, pytesseract, "+".join(wanted), Image)
-        pw = page[0]["_page_w"] if page else base.width
+        alt = _read_page(base, 1300, index, pytesseract, "+".join(wanted), Image, budget) if budget.left() else []
+        pw = page[0]["_page_w"] if page else (alt[0]["_page_w"] if alt else base.width)
         merged = _merge_scales(page, alt)
         merged += _name_line_above_latin(merged, base.resize((pw, max(1, round(base.height * pw / base.width))), Image.LANCZOS),
-                                         index, pytesseract, "+".join(wanted), to_ascii_digits)
+                                         index, pytesseract, "+".join(wanted), to_ascii_digits, budget)
         merged = _dedupe(merged)
         scaled = base.resize((pw, max(1, round(base.height * pw / base.width))), Image.LANCZOS)
-        merged += _fill_row_gaps(merged, scaled, index, pytesseract, "+".join(wanted), to_ascii_digits)
-        _reread_id_digits(merged, scaled, pytesseract, to_ascii_digits)
+        merged += _fill_row_gaps(merged, scaled, index, pytesseract, "+".join(wanted), to_ascii_digits, budget)
+        _reread_id_digits(merged, scaled, pytesseract, to_ascii_digits, budget)
         for ln in merged:
             ln["scale"] = round(pw / base.width, 4)      # box pixels per pixel of the uploaded image
         lines.extend(merged)
@@ -64,7 +87,7 @@ def _dedupe(lines: list[dict]) -> list[dict]:
     return sorted(kept, key=lambda l: (l["box"][0][1], l["box"][0][0]))
 
 
-def _fill_row_gaps(lines: list[dict], img, index: int, pytesseract, langs: str, to_digits) -> list[dict]:
+def _fill_row_gaps(lines: list[dict], img, index: int, pytesseract, langs: str, to_digits, budget: _Budget) -> list[dict]:
     """Cards print rows at an even pitch. When two neighbouring lines are about two pitches apart, a row between them was dropped
     (a blurred row often is): read that band on its own."""
     rows = sorted((l for l in lines if l["box"][2][1] - l["box"][0][1] > 8), key=lambda l: l["box"][0][1])
@@ -78,6 +101,7 @@ def _fill_row_gaps(lines: list[dict], img, index: int, pytesseract, langs: str, 
     x0 = min(r["box"][0][0] for r in rows)
     x1 = max(r["box"][1][0] for r in rows)
     found: list[dict] = []
+    bands = 0
     for a, b in zip(rows, rows[1:]):
         gap = b["box"][0][1] - a["box"][0][1]
         if not 1.7 * pitch <= gap <= 3.2 * pitch:
@@ -85,14 +109,19 @@ def _fill_row_gaps(lines: list[dict], img, index: int, pytesseract, langs: str, 
         top, bottom = a["box"][2][1] + 2, b["box"][0][1] - 2
         if bottom - top < 0.5 * pitch:
             continue
+        bands += 1
+        if bands > MAX_STRIPS or not budget.left():
+            break
         band = img.crop((max(0, x0 - 20), top, min(img.width, x1 + 20), bottom))
         best = None
         for scale in (0.5, 1.0):
             c = band.resize((max(1, int(band.width * scale)), max(1, int(band.height * scale))))
             for psm in (6, 7):
+                if not budget.left():
+                    break
                 try:
                     d = pytesseract.image_to_data(c, lang=langs, config=f"--psm {psm}", output_type=pytesseract.Output.DICT,
-                                                  timeout=app_config.ocr_timeout())
+                                                  timeout=budget.call_timeout())
                 except Exception:  # noqa: BLE001
                     continue
                 idx = [i for i, w in enumerate(d["text"]) if str(w).strip() and float(d["conf"][i]) >= 0]
@@ -109,10 +138,11 @@ def _fill_row_gaps(lines: list[dict], img, index: int, pytesseract, langs: str, 
     return found
 
 
-def _name_line_above_latin(lines: list[dict], img, index: int, pytesseract, langs: str, to_digits) -> list[dict]:
+def _name_line_above_latin(lines: list[dict], img, index: int, pytesseract, langs: str, to_digits, budget: _Budget) -> list[dict]:
     """Cards print the Arabic name directly above the Latin one. When there is a Latin name line (capital words) and no Arabic line
     in the strip above it, that line was dropped by the page reading: read the strip on its own."""
     import re
+    strips = 0
     for ln in lines:
         t = ln["text"].strip()
         if not re.fullmatch(r"[A-Z][A-Z' .-]{4,}", t) or len(t.split()) < 2:
@@ -125,15 +155,20 @@ def _name_line_above_latin(lines: list[dict], img, index: int, pytesseract, lang
         if any(o is not ln and o["script"] == "arabic" and top - h <= o["box"][0][1] and o["box"][2][1] <= y0 + h * 0.3
                and min(o["box"][1][0], x1) - max(o["box"][0][0], x0) > 0.3 * (x1 - x0) for o in lines):
             continue
+        strips += 1
+        if strips > MAX_STRIPS or not budget.left():
+            break
         strip = img.crop((max(0, x0 - int(h * 2)), top, min(img.width, x1 + int(h * 0.6)), bottom))
         best = None
         arabic_only = "ara" if "ara" in langs.split("+") else langs
         for scale in (0.5, 1.0):
             c = strip.resize((max(1, int(strip.width * scale)), max(1, int(strip.height * scale))))
             for psm in (6, 13):
+                if not budget.left():
+                    break
                 try:
                     d = pytesseract.image_to_data(c, lang=arabic_only, config=f"--psm {psm}", output_type=pytesseract.Output.DICT,
-                                                  timeout=app_config.ocr_timeout())
+                                                  timeout=budget.call_timeout())
                 except Exception:  # noqa: BLE001
                     continue
                 idx = [i for i, w in enumerate(d["text"]) if str(w).strip() and float(d["conf"][i]) >= 0]
@@ -149,7 +184,7 @@ def _name_line_above_latin(lines: list[dict], img, index: int, pytesseract, lang
     return []
 
 
-def _read_page(base, width: int, index: int, pytesseract, langs: str, Image) -> list[dict]:
+def _read_page(base, width: int, index: int, pytesseract, langs: str, Image, budget: _Budget) -> list[dict]:
     img = base
     size = upscaled_size(img.width, img.height, width)
     if size:
@@ -176,7 +211,7 @@ def _read_page(base, width: int, index: int, pytesseract, langs: str, Image) -> 
         out.append({"image": index, "lang": "ara+eng", "text": text, "normalizedText": to_ascii_digits(text),
                     "script": script_of(text), "score": round(score, 4), "box": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
                     "_page_w": img.width})
-    _reread_weak(out, img, pytesseract, langs, Image)
+    _reread_weak(out, img, pytesseract, langs, Image, budget)
     return out
 
 
@@ -207,21 +242,25 @@ def _merge_scales(a: list[dict], b: list[dict]) -> list[dict]:
     return result
 
 
-def _reread_weak(page_lines: list[dict], img, pytesseract, langs: str, Image) -> None:
+def _reread_weak(page_lines: list[dict], img, pytesseract, langs: str, Image, budget: _Budget) -> None:
     """A line read with low confidence is read again on its own, at two scales, and replaced only when the new reading is more
     confident. Whole-page reading garbles some single lines (a short Arabic country name, say) that read cleanly alone."""
-    for line in page_lines:
-        if line["score"] >= 0.6:
-            continue
+    weak = [l for l in page_lines if l["score"] < 0.6]
+    # longest lines first: a field value is worth a second look before a stray mark
+    for line in sorted(weak, key=lambda l: -len(l["text"]))[:MAX_REREADS]:
+        if not budget.left():
+            break
         (x0, y0), (x1, _), (_, y1) = line["box"][0], line["box"][1], line["box"][2]
         pad = max(10, int((y1 - y0) * 0.35))
         crop = img.crop((max(0, x0 - pad), max(0, y0 - pad), min(img.width, x1 + pad), min(img.height, y1 + pad)))
         best = None
         for scale in (0.5, 1.0):
             c = crop.resize((max(1, int(crop.width * scale)), max(1, int(crop.height * scale))), Image.LANCZOS)
+            if not budget.left():
+                break
             try:
                 d = pytesseract.image_to_data(c, lang=langs, config="--psm 7", output_type=pytesseract.Output.DICT,
-                                              timeout=app_config.ocr_timeout())
+                                              timeout=budget.call_timeout())
             except Exception:  # noqa: BLE001
                 continue
             words = [(str(t).strip(), float(cf)) for t, cf in zip(d["text"], d["conf"]) if str(t).strip() and float(cf) >= 0]
@@ -236,7 +275,7 @@ def _reread_weak(page_lines: list[dict], img, pytesseract, langs: str, Image) ->
             line["script"], line["score"] = script_of(best[0]), round(best[1], 4)
 
 
-def _reread_id_digits(lines: list[dict], img, pytesseract, to_digits) -> None:
+def _reread_id_digits(lines: list[dict], img, pytesseract, to_digits, budget: _Budget) -> None:
     """The ID number row is read again with digits only. Blur makes the whole-page reading drop or swap digits; a digits-only read
     of the one row often gets them all. The new digits replace the old ones only when they form a number that passes an ID check
     and the old ones do not."""
@@ -248,6 +287,7 @@ def _reread_id_digits(lines: list[dict], img, pytesseract, to_digits) -> None:
         info = gcc_ids.classify(num)
         return bool(info and info["valid"]) or (len(num) == 10 and num[0] in "12" and saudi_id_check(num))
 
+    rows = 0
     for ln in lines:
         text = to_digits(ln["text"])
         runs = re.findall(r"\d[\d\s-]{6,}\d", text)
@@ -256,16 +296,21 @@ def _reread_id_digits(lines: list[dict], img, pytesseract, to_digits) -> None:
         old = re.sub(r"[\s-]", "", runs[0])
         if passes(old):
             continue
+        rows += 1
+        if rows > MAX_ID_ROWS or not budget.left():
+            break
         (x0, y0), (x1, _), (_, y1) = ln["box"][0], ln["box"][1], ln["box"][2]
         pad = max(6, int((y1 - y0) * 0.2))
         row = img.crop((max(0, x0 - pad), max(0, y0 - pad), min(img.width, x1 + pad), min(img.height, y1 + pad)))
         tries = [(scale, psm, share) for share in (0.7, 1.0) for scale in (0.5, 1.0) for psm in (6, 7)]
         for scale, psm, share in tries:
+            if not budget.left():
+                break
             part = row.crop((0, 0, max(1, int(row.width * share)), row.height))
             c = part.resize((max(1, int(part.width * scale)), max(1, int(part.height * scale))))
             try:
                 got = pytesseract.image_to_string(c, lang="eng", config=f"--psm {psm} -c tessedit_char_whitelist=0123456789-",
-                                                  timeout=app_config.ocr_timeout())
+                                                  timeout=budget.call_timeout())
             except Exception:  # noqa: BLE001
                 continue
             new = re.sub(r"\D", "", got)

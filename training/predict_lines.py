@@ -12,10 +12,12 @@ Check the TextRecognition API against the PaddleOCR version you installed; names
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 
 def main() -> None:
+    os.umask(0o077)      # predictions repeat text read from identity documents
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--labels", type=Path, required=True)
     ap.add_argument("--image-dir", type=Path, required=True)
