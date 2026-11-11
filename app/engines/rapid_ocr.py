@@ -97,7 +97,11 @@ class RapidOcrEngine:
                     if out_of_time or (best and time.monotonic() - started > budget):
                         break                              # a reading is in hand: do not spend longer looking for a better one
                     view = img if angle == 0 else img.rotate(angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
-                    for frac, enlarge in ((1.0, False), (1.0, True), (0.45, True)):
+                    # Under a hard limit the enlarged bottom strip comes before the enlarged full page: the MRZ is at the bottom, and
+                    # the strip costs less than half as much to read.
+                    variants = ((1.0, False), (0.45, True), (1.0, True)) if deadline else ((1.0, False), (1.0, True), (0.45, True))
+                    ran = False
+                    for frac, enlarge in variants:
                         y_off = int(view.height * (1 - frac))
                         part = view.crop((0, y_off, view.width, view.height))
                         native_width = part.width
@@ -119,10 +123,10 @@ class RapidOcrEngine:
                             area = part.width * part.height
                             expected = max(0.4, last_cost * area / last_area) if last_area else 0.8
                             if elapsed + expected > deadline - 0.1:
-                                out_of_time = True
-                                break
+                                continue                   # this attempt does not fit; a cheaper one after it may
                         elif elapsed > hard and not best:
                             break                          # nothing found and well over time: give up on this image
+                        ran = True
                         t0 = time.monotonic()
                         texts, scores = self._read(reader, part, np)
                         last_cost, last_area = time.monotonic() - t0, part.width * part.height
@@ -138,4 +142,6 @@ class RapidOcrEngine:
                             best_fields = {"mrzLineBoxes": boxes} if boxes else {}
                         if perfect:
                             return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf, fields=best_fields)
+                    if deadline and not ran:
+                        out_of_time = True                 # nothing fits any more: stop trying other angles
         return EngineOutput(engine=self.name, mrz_lines=best, mrz_confidence=best_conf, fields=best_fields)
