@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -66,7 +67,12 @@ async def lifespan(_app):
     stop.set()
 
 
-app = FastAPI(title="Visa Portal Document OCR", version="0.3.0", lifespan=lifespan)
+# The interactive API pages are off unless API_DOCS=1: they are served without a key, describe every endpoint, and load their
+# scripts from a public CDN, which an offline server cannot reach anyway.
+_docs = os.environ.get("API_DOCS", "").strip().lower() in ("1", "true", "yes", "on")
+app = FastAPI(title="Visa Portal Document OCR", version="0.3.0", lifespan=lifespan,
+              docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
+              openapi_url="/openapi.json" if _docs else None)
 app.add_middleware(security.BodyLimit)
 training = TrainingStore()  # disabled unless TRAINING_STORE_DIR is set
 # In-process OCR jobs run on their own small pool, never on the framework's thread pool, so waiting or slow jobs cannot
@@ -119,7 +125,7 @@ def readyz() -> dict:
     """Ready when the job store works and every active OCR model is present and unchanged."""
     problems: list[str] = []
     try:
-        store.count()
+        getattr(store, "ping", store.count)()      # a cheap check: this route is open to anonymous callers
     except Exception:  # noqa: BLE001
         problems.append("job store unavailable")
     # Which model problems stop the service depends on the engine in use. The Tesseract + RapidOCR pair needs no model files.
@@ -154,7 +160,7 @@ def root() -> dict:
         "version": app.version,
         "health": "/healthz",
         "ui": "/ui",
-        "docs": "/docs",
+        **({"docs": "/docs"} if _docs else {}),
         "endpoints": ["POST /v1/documents/extract", "GET /v1/jobs/{id}", "POST /v1/mrz/parse",
                       "POST /v1/jobs/{id}/corrections", "GET /v1/models"],
     }
@@ -248,7 +254,9 @@ async def extract(
 
 
 def _own_job(job_id: str, owner: str):
-    job = store.get(job_id)
+    # Job ids are 32 hex characters. Anything else is answered here and never reaches the store (a NUL byte, for one, makes
+    # PostgreSQL raise).
+    job = store.get(job_id) if re.fullmatch(r"[0-9a-f]{32}", job_id) else None
     if job is None or (owner != "anonymous" and job.owner != owner):   # same answer for "not yours" and "not found"
         raise HTTPException(404, {"code": "job_not_found", "message": "Unknown or expired job id"})
     return job

@@ -24,8 +24,10 @@ class _Budget:
     """Time allowed for one read_text_lines call. The number of text rows on a page is not bounded, so every extra Tesseract
     call (a separate process) is counted against this: OCR_DEADLINE_SECONDS when set, otherwise OCR_TEXT_SECONDS (20)."""
 
-    def __init__(self) -> None:
-        self.end = time.monotonic() + (app_config.ocr_deadline() or app_config.text_read_seconds())
+    def __init__(self, seconds: float | None = None) -> None:
+        if seconds is None:
+            seconds = app_config.ocr_deadline() or app_config.text_read_seconds()
+        self.end = time.monotonic() + seconds
 
     def left(self) -> bool:
         return time.monotonic() < self.end
@@ -42,7 +44,9 @@ def available_langs() -> set[str]:
         return set()
 
 
-def read_text_lines(images: list[bytes], langs: str | None = None) -> list[dict]:
+def read_text_lines(images: list[bytes], langs: str | None = None, budget_seconds: float | None = None) -> list[dict]:
+    """budget_seconds: time left for this read when the caller already spent part of the job's limit (the first page reading
+    always runs; everything after it is skipped once the time is used up)."""
     try:
         import pytesseract
         from PIL import Image, ImageOps
@@ -54,7 +58,7 @@ def read_text_lines(images: list[bytes], langs: str | None = None) -> list[dict]
     if not wanted:
         raise EngineUnavailable("Tesseract has none of the requested languages: " + langs)
     lines: list[dict] = []
-    budget = _Budget()
+    budget = _Budget(budget_seconds)
     for index, raw in enumerate(images):
         if index and not budget.left():
             break                                   # out of time: later images are not read

@@ -52,7 +52,7 @@ with a regression test in `tests/test_security_audit_2.py`:
 | Training data | A correction cannot re-create purged data. Training run folders are owner-only, cleaned when a run ends, and expire |
 
 Still open, because source cannot settle them (see the audit's `NEEDS-VALIDATION.md`): request bodies are read before the
-key is checked (put a body-size limit and timeouts on the proxy); PostgreSQL connections are opened per call with no pool;
+key is checked (put a body-size limit and timeouts on the proxy); PostgreSQL connections were opened per call (fixed after the system test: one reused connection per thread, with a statement time limit);
 model promotion is scored on validation lines that reviewers supply (keep `--activate` off until an operator-held
 validation set exists). The card parser's slow path on very many text lines is now bounded by `MAX_TEXT_LINES` (250).
 

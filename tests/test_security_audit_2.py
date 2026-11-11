@@ -514,3 +514,48 @@ def test_card_parser_line_count_is_bounded(monkeypatch):
     many = [L("Name", 10 * i) for i in range(500)]
     pipeline.run([png()], "gcc_id", Applicant(), Fixed(lines=None, text=many))
     assert seen["n"] == 20
+
+
+# ------------------------------------------------------------------ found by the system test (11 Nov 2026)
+def test_api_docs_pages_are_off_by_default():
+    c = TestClient(main.app)
+    assert [c.get(p).status_code for p in ("/docs", "/redoc", "/openapi.json")] == [404, 404, 404]
+    assert "docs" not in c.get("/").json()
+
+
+def test_streamed_oversize_upload_gets_413(monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "2000")
+    monkeypatch.setenv("MAX_FILES", "1")
+    big = b"\xff\xd8\xff" + b"0" * (3 * 1024 * 1024)
+
+    def body():
+        yield b'--xx\r\nContent-Disposition: form-data; name="files"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'
+        yield big
+        yield b"\r\n--xx--\r\n"
+
+    r = TestClient(main.app).post("/v1/documents/extract", content=body(), headers={"Content-Type": "multipart/form-data; boundary=xx"})
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "body_too_large"
+
+
+def test_truncated_image_is_an_invalid_image_not_an_internal_error(monkeypatch):
+    from app import pipeline
+
+    class Broken:
+        name = "x"
+
+        def extract(self, images, hint):
+            raise OSError("image file is truncated (2 bytes not processed)")
+
+    status, payload = pipeline.run([png()], None, Applicant(), Broken())
+    assert status == "failed" and payload["code"] == "invalid_image"
+
+
+def test_malformed_job_ids_never_reach_the_store(monkeypatch):
+    class Exploding:
+        def get(self, job_id):
+            raise RuntimeError("store was called with " + repr(job_id))
+    monkeypatch.setattr(main, "store", Exploding())
+    c = TestClient(main.app)
+    for bad in ("%00", "abc", "g" * 32, "0" * 31, "0" * 33, "' OR 1=1--"):
+        assert c.get("/v1/jobs/" + bad).status_code == 404
+        assert c.post(f"/v1/jobs/{bad}/corrections", json={"reviewer": "r"}).status_code == 404

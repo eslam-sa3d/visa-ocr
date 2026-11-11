@@ -19,6 +19,10 @@ load-tested. Run `tools/load_test.py` on the real servers before buying to the l
 
 Not measured: PaddleOCR on CPU or GPU on the target servers, and anything at production load.
 
+A system test on 11 Nov 2026 (`TEST_REPORT.md`) confirmed the 2 core-seconds per read: about 59 documents a minute on
+2 cores, flat from 1 to 16 clients, with or without the PostgreSQL queue. Peak memory of one busy service with a backlog
+was 1.46 GB.
+
 ## 2. The sizing rule
 
 Hardware follows uploads per second at peak, not the number of users signed in.

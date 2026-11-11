@@ -130,18 +130,27 @@ class BodyLimit:
             return await self._reject(send)
         seen = 0
         started = False
+        exceeded = False
+        rejected = False
 
         async def counting_receive():
-            nonlocal seen
+            nonlocal seen, exceeded
             msg = await receive()
             if msg["type"] == "http.request":
                 seen += len(msg.get("body", b""))
                 if seen > limit:
+                    exceeded = True
                     raise _TooLarge()
             return msg
 
         async def tracking_send(msg):
-            nonlocal started
+            nonlocal started, rejected
+            if exceeded and not started:
+                # The form parser caught the error and is about to answer "400 could not parse": say what really happened.
+                if not rejected:
+                    rejected = True
+                    await self._reject(send)
+                return
             if msg["type"] == "http.response.start":
                 started = True
             await send(msg)
@@ -149,7 +158,7 @@ class BodyLimit:
         try:
             await self.app(scope, counting_receive, tracking_send)
         except _TooLarge:
-            if not started:
+            if not started and not rejected:
                 await self._reject(send)
 
     @staticmethod
