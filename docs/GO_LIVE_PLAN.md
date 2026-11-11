@@ -40,6 +40,6 @@ raised `MAX_PENDING_JOBS`. Pin cores with `docker run --cpuset-cpus`. GPU count 
 | Load test at real peak on target servers | Engineering + infra | Servers, PostgreSQL |
 | PaddleOCR timing on a GPU server | Infra | One GPU server |
 | Fine-tuning (B3), only if the real-specimen result is short | Engineering | About 5,000 corrected lines, GPU |
-| Retraining process: manual, gated, never automatic | Engineering | Decision from the business owner |
+| Automatic retraining (`training/auto_train.py`): built and tested with the training step replaced; first real run on a GPU server still to do | Engineering + infra | GPU server, pretrained weights, 500+ corrected lines |
 | US driving licences, old non-standard EU cards | Business owner | Decide if in scope |
 | Sign-off of thresholds (E2) | Business owner | `docs/ACCEPTANCE_SIGNOFF.md` |
