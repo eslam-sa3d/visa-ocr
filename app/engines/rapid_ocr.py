@@ -5,12 +5,16 @@ reading with Tesseract's. Optional: without the package the ensemble simply uses
 from __future__ import annotations
 
 import io
+import os
 import re
 import threading
+import time
 
+from .. import config as app_config
 from ..mrz import MrzError, find_mrz_lines, parse_mrz
 from ..uploads import upscaled_size
 from .base import EngineOutput, EngineUnavailable
+from .tesseract_mrz import _estimate_tilt
 
 _FILLER_LIKE = str.maketrans({">": "<", "«": "<", "‹": "<", "＜": "<", "《": "<", " ": "", "\t": ""})
 
@@ -56,18 +60,46 @@ class RapidOcrEngine:
         except ImportError as exc:
             raise EngineUnavailable(f"Missing Python dependency: {exc.name}") from exc
         reader = self._load()
+        budget = float(os.environ.get("OCR_SECOND_READER_SECONDS", "1.5"))
+        deadline = app_config.ocr_deadline()
+        hard = budget * 3
         best, best_conf, best_score = None, None, -2
         with self._lock:
             for raw in images:
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-                for angle in (0, 3, -3, 5, -5):
+                # The estimated tilt is tried first. Each view is read at its own size first (fast), and enlarged only if
+                # that reading is not perfect: enlarging a page that is already big enough only makes detection slower.
+                tilt = _estimate_tilt(img.convert("L"), Image)
+                angles = [0, 3, -3, 5, -5]
+                if abs(tilt) >= 2:
+                    angles = [tilt] + sorted((a for a in angles if a != tilt), key=lambda a: abs(a - tilt))
+                started = time.monotonic()
+                last_cost, last_area, out_of_time = 0.0, 0, False
+                for angle in angles:
+                    if out_of_time or (best and time.monotonic() - started > budget):
+                        break                              # a reading is in hand: do not spend longer looking for a better one
                     view = img if angle == 0 else img.rotate(angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
-                    for frac in (1.0, 0.45):
+                    for frac, enlarge in ((1.0, False), (1.0, True), (0.45, True)):
                         part = view.crop((0, int(view.height * (1 - frac)), view.width, view.height))
-                        size = upscaled_size(part.width, part.height, 1800)
+                        size = upscaled_size(part.width, part.height, 1800 if enlarge else 1000)
                         if size and size[0] > part.width:
                             part = part.resize(size, Image.LANCZOS)
+                        elif enlarge and frac == 1.0:
+                            continue                       # already that large: the first reading covered it
+                        elapsed = time.monotonic() - started
+                        if deadline:
+                            # Under a hard limit, start an attempt only if it should finish in time. Its cost is estimated
+                            # from the last attempt, scaled by image area.
+                            area = part.width * part.height
+                            expected = max(0.4, last_cost * area / last_area) if last_area else 0.8
+                            if elapsed + expected > deadline - 0.1:
+                                out_of_time = True
+                                break
+                        elif elapsed > hard and not best:
+                            break                          # nothing found and well over time: give up on this image
+                        t0 = time.monotonic()
                         texts, scores = self._read(reader, part, np)
+                        last_cost, last_area = time.monotonic() - t0, part.width * part.height
                         lines = find_mrz_lines(texts)
                         if not lines:
                             continue

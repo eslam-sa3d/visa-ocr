@@ -18,6 +18,26 @@ from .base import EngineOutput, EngineUnavailable
 _WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
 
 
+def _estimate_tilt(img, Image) -> int:
+    """Whole degrees (-6..6) to rotate the page so its text rows are level. Level text gives the sharpest row profile: rows of ink
+    and rows of blank paper differ most. Runs on a small copy, so it costs a few milliseconds."""
+    try:
+        import numpy as np  # noqa: WPS433
+    except ImportError:
+        return 0
+    w = 480
+    small = img.resize((w, max(1, round(img.height * w / img.width))), Image.BILINEAR)
+    best, best_score = 0, -1.0
+    for angle in range(-6, 7):
+        view = small if angle == 0 else small.rotate(angle, Image.BILINEAR, fillcolor=255)
+        rows = (255 - np.asarray(view, dtype=np.float32)).sum(axis=1)
+        score = float(((rows[1:] - rows[:-1]) ** 2).sum())
+        if score > best_score * (1.03 if angle != 0 else 1.0):      # prefer level unless another angle is clearly sharper
+            if angle == 0 or score > best_score * 1.03:
+                best, best_score = angle, score
+    return best
+
+
 class TesseractMrzEngine:
     name = "tesseract-mrz"
 
@@ -49,6 +69,9 @@ class TesseractMrzEngine:
         pytesseract, Image, ImageOps = self._deps()
         config = f"--psm 6 -c tessedit_char_whitelist={_WHITELIST}"
         budget = float(os.environ.get("OCR_SEARCH_SECONDS", "8"))
+        deadline = app_config.ocr_deadline()
+        if deadline:
+            budget = min(budget, max(0.3, deadline - 0.5))            # one attempt takes about 0.2 to 0.4 s
 
         def read(img, top: float, width: int) -> list[str] | None:
             crop = ImageOps.autocontrast(img.crop((0, int(img.height * top), img.width, img.height)))
@@ -64,7 +87,13 @@ class TesseractMrzEngine:
             started = time.monotonic()
             best_score = -2
             # Plain image first, then small rotations (hand-held photos are rarely level), then a larger scale.
-            for angle in (0, 2, -2, 4, -4, 6, -6):
+            # The tilt is estimated first so the likeliest angle is tried first instead of walking through all of them.
+            tilt = _estimate_tilt(img, Image)
+            angles = [0, 2, -2, 4, -4, 6, -6]
+            if abs(tilt) >= 2:
+                angles = [tilt] + sorted((a for a in angles if a != tilt), key=lambda a: abs(a - tilt))
+            seen: dict[tuple, int] = {}
+            for angle in angles:
                 view = img if angle == 0 else img.rotate(angle, Image.BICUBIC, expand=True, fillcolor=255)
                 for width in (1600, 2400):
                     if angle and width != 1600:
@@ -80,10 +109,17 @@ class TesseractMrzEngine:
                             best, best_score = lines, score
                         if perfect:
                             return EngineOutput(engine=self.name, mrz_lines=lines)
+                        # The same lines from two different crops or scales is a stable reading: the page is level and a
+                        # failing check digit is a look-alike character (O/0), which rotating will not fix. Stop searching.
+                        seen[tuple(lines)] = seen.get(tuple(lines), 0) + 1
+                        if seen[tuple(lines)] >= 2 and score >= 0:
+                            return EngineOutput(engine=self.name, mrz_lines=best)
             if best:
                 return EngineOutput(engine=self.name, mrz_lines=best)
             # Nothing found upright: the page may be sideways or upside down (a scan fed in the wrong way round).
             # EXIF orientation does not cover that, so try the three other quarter-turns with a short search.
+            if deadline:
+                continue                                              # no time left for the sideways search under a hard limit
             started = time.monotonic()
             for quarter in (90, 270, 180):
                 view = img.rotate(quarter, Image.BICUBIC, expand=True, fillcolor=255)
