@@ -101,11 +101,17 @@ class RapidOcrEngine:
                         y_off = int(view.height * (1 - frac))
                         part = view.crop((0, y_off, view.width, view.height))
                         native_width = part.width
-                        size = upscaled_size(part.width, part.height, 1800 if enlarge else 1000)
-                        if size and size[0] > part.width:
-                            part = part.resize(size, Image.LANCZOS)
-                        elif enlarge and frac == 1.0:
-                            continue                       # already that large: the first reading covered it
+                        # First attempt at about 1200 pixels wide: reading time grows with image size, and a full page reads
+                        # well at that width. The later attempts use 1800 for small print.
+                        target = 1800 if enlarge else min(1200, max(1000, native_width))
+                        if native_width > target:
+                            part = part.resize((target, max(1, round(part.height * target / native_width))), Image.LANCZOS)
+                        else:
+                            size = upscaled_size(part.width, part.height, target)
+                            if size and size[0] > part.width:
+                                part = part.resize(size, Image.LANCZOS)
+                            elif enlarge and frac == 1.0 and native_width <= 1200:
+                                continue                   # could not be enlarged and the first reading covered this size
                         elapsed = time.monotonic() - started
                         if deadline:
                             # Under a hard limit, start an attempt only if it should finish in time. Its cost is estimated

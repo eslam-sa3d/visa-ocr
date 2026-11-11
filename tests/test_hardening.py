@@ -265,8 +265,16 @@ def test_readyz_reports_missing_models(monkeypatch, tmp_path):
     monkeypatch.setenv("MODELS_DIR", str(tmp_path))
     (tmp_path / "manifest.json").write_text('{"models":[{"id":"m","task":"text_detection","lang":"any","version":"1",'
                                             '"path":"nope","arch":"x","sha256":null,"active":true}]}')
+    main._model_cache["at"] = 0.0
+    monkeypatch.setenv("OCR_ENGINE", "paddle-ocr")           # this engine cannot work without its models: not ready
     r = TestClient(main.app).get("/readyz")
     assert r.status_code == 503 and "missing" in r.json()["detail"]["message"]
+    monkeypatch.setenv("OCR_ENGINE", "auto")                 # falls back to the other readers: ready, with a warning
+    r = TestClient(main.app).get("/readyz")
+    assert r.status_code == 200 and "missing" in r.json()["warnings"][0]
+    monkeypatch.setenv("OCR_ENGINE", "ensemble")             # needs no model files at all
+    assert TestClient(main.app).get("/readyz").json().get("warnings") is None
+    main._model_cache["at"] = 0.0
 
 
 def test_very_old_or_newborn_age_gets_century_warning():
@@ -276,3 +284,19 @@ def test_very_old_or_newborn_age_gets_century_warning():
     r = parse_mrz(TD3, today=date(2026, 11, 9))           # born 1974: normal
     assert "birth_century_check" not in {f.code for f in validate(r, date(2026, 11, 9))}
     assert "birth_century_check" in {f.code for f in validate(r, date(2074, 1, 1))}   # would be 100 years old
+
+
+def test_large_photo_is_reduced_before_reading_and_small_one_is_untouched(monkeypatch):
+    import io
+    from PIL import Image
+    from app.uploads import shrink_for_ocr
+    big = io.BytesIO()
+    Image.new("RGB", (4000, 3000), (200, 200, 200)).save(big, "JPEG")
+    out = shrink_for_ocr(big.getvalue())
+    assert max(Image.open(io.BytesIO(out)).size) == 2000 and len(out) < len(big.getvalue())
+    small = io.BytesIO()
+    Image.new("RGB", (1200, 800), (200, 200, 200)).save(small, "PNG")
+    assert shrink_for_ocr(small.getvalue()) is small.getvalue() or shrink_for_ocr(small.getvalue()) == small.getvalue()
+    monkeypatch.setenv("WORK_MAX_SIDE", "0")
+    assert shrink_for_ocr(big.getvalue()) == big.getvalue()          # switched off
+    assert shrink_for_ocr(b"not an image") == b"not an image"        # left for the normal error handling

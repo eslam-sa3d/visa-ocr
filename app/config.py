@@ -57,3 +57,9 @@ def ocr_deadline() -> float:
         return max(0.0, float(os.environ.get("OCR_DEADLINE_SECONDS", "0")))
     except ValueError:
         return 0.0
+
+
+def work_max_side() -> int:
+    """Longest side, in pixels, that images are reduced to before reading (0 = never reduce). Lower is faster and uses less
+    memory; too low loses small print. 2000 keeps a full passport page comfortably readable."""
+    return max(0, _int("WORK_MAX_SIDE", 2000))

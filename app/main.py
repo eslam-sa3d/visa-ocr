@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import threading
 import time
 import uuid
@@ -32,7 +33,7 @@ from .model_registry import Registry
 from .mrz import MrzError
 from .review import Applicant, compare_applicant
 from .training_store import TrainingStore
-from .uploads import validate_image
+from .uploads import validate_image, shrink_for_ocr
 
 log = logging.getLogger("visa-ocr")
 
@@ -114,10 +115,20 @@ def readyz() -> dict:
         store.count()
     except Exception:  # noqa: BLE001
         problems.append("job store unavailable")
-    problems += _model_problems()
+    # Which model problems stop the service depends on the engine in use. The Tesseract + RapidOCR pair needs no model files.
+    # "auto" falls back to that pair when PaddleOCR models are absent, so a missing model is a warning there; a model whose
+    # files changed (checksum mismatch) is always a failure.
+    engine = os.environ.get("OCR_ENGINE", "auto")
+    warnings: list[str] = []
+    if engine in ("auto", "paddle-ocr"):
+        for p in _model_problems():
+            (warnings if engine == "auto" and p.endswith("is missing") else problems).append(p)
     if problems:
         raise HTTPException(503, {"code": "not_ready", "message": "; ".join(problems)})
-    return {"status": "ready", "authEnabled": security.auth_enabled()}
+    out = {"status": "ready", "authEnabled": security.auth_enabled()}
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 _UI_FILE = Path(__file__).parent / "static" / "index.html"
@@ -204,7 +215,7 @@ async def extract(
     for f in files:
         data = await f.read(config.max_bytes() + 1)
         validate_image(data, f.content_type)
-        images.append(data)
+        images.append(shrink_for_ocr(data))        # the queue, the readers and the training store all get this one image
 
     job = store.create(request.state.correlation_id, owner)
     if consent_training and training.enabled:
