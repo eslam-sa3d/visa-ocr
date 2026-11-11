@@ -22,8 +22,13 @@ _CID = re.compile(r"[A-Za-z0-9._\-]{1,64}")
 
 
 def _digests() -> list[str]:
-    out = [hashlib.sha256(k.strip().encode()).hexdigest() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()]
-    out += [h.strip().lower() for h in os.environ.get("API_KEY_SHA256", "").split(",") if h.strip()]
+    raw_keys, raw_hashes = os.environ.get("API_KEYS", ""), os.environ.get("API_KEY_SHA256", "")
+    out = [hashlib.sha256(k.strip().encode()).hexdigest() for k in raw_keys.split(",") if k.strip()]
+    out += [h.strip().lower() for h in raw_hashes.split(",") if h.strip()]
+    if not out and (raw_keys or raw_hashes):
+        # A key variable is set but holds no usable key (for example "," from two empty variables). Fail closed:
+        # treating this as "no key configured" would silently turn authentication off.
+        raise RuntimeError("API_KEYS / API_KEY_SHA256 is set but contains no usable key")
     return out
 
 
@@ -50,8 +55,7 @@ def authenticate(request: Request) -> str:
         if hmac.compare_digest(given, d):
             return given[:16]
     # Throttle wrong keys per client address so a key cannot be guessed at full speed
-    if config.rate_limit_per_minute() > 0:
-        limiter.check("badkey:" + client_id(request, "anonymous"), limit=config.bad_key_limit_per_minute())
+    limiter.check("badkey:" + client_id(request, "anonymous"), limit=config.bad_key_limit_per_minute())
     raise HTTPException(401, {"code": "unauthorized", "message": "A valid API key is required"},
                         headers={"WWW-Authenticate": "ApiKey"})
 

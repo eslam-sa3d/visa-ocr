@@ -2,11 +2,11 @@
 
 | Control | How |
 |---|---|
-| Authentication | `API_KEYS=key1,key2` (or `API_KEY_SHA256=<hex>`), sent as `X-API-Key` or `Authorization: Bearer`. Unset = open (a warning is logged); the Docker image refuses to start without a key unless `ALLOW_ANONYMOUS=1`. Wrong keys are limited separately and more tightly (`BAD_KEY_LIMIT_PER_MIN`, default 10 per client address); use long random keys (`openssl rand -hex 32`), a startup warning flags keys under 24 characters. `/healthz`, `/ui` stay open. |
+| Authentication | `API_KEYS=key1,key2` (or `API_KEY_SHA256=<hex>`), sent as `X-API-Key` or `Authorization: Bearer`. Unset = open (a warning is logged); a value that holds no usable key (only commas or spaces) stops the service instead of turning authentication off; the Docker image refuses to start without a key unless `ALLOW_ANONYMOUS=1`. Wrong keys are limited separately and more tightly (`BAD_KEY_LIMIT_PER_MIN`, default 10 per client address, also when `RATE_LIMIT_PER_MIN=0`); use long random keys (`openssl rand -hex 32`), a startup warning flags keys under 24 characters. `/healthz`, `/ui` stay open. |
 | Rate limit | `RATE_LIMIT_PER_MIN` per key (per IP when open); 429 with `Retry-After`. `TRUST_PROXY=true` only behind your own reverse proxy. |
 | Job privacy | Jobs belong to the key that created them; another key gets 404. |
 | Retention | Jobs expire after `JOB_TTL_MINUTES` (default 60). Images are not kept after processing (exceptions: consented training storage, and short-lived Tesseract temp crops in the temp directory while a job runs); extracted text lines are not returned unless `INCLUDE_TEXT_LINES=true`. |
-| Housekeeping | A background sweep every `HOUSEKEEPING_SECONDS` (300) deletes expired jobs even when the service is idle, and removes training-store folders older than `TRAINING_RETENTION_DAYS` (30; 0 = keep until you purge). SQLite files are created owner-only (0600) with secure delete on. For a consent withdrawal run `python tools/purge_training.py --store-dir <dir> --job-id <id>`; for a cron job use `--days N`. |
+| Housekeeping | A background sweep every `HOUSEKEEPING_SECONDS` (300) deletes expired jobs even when the service is idle, and removes training-store folders older than `TRAINING_RETENTION_DAYS` (30; 0 = keep until you purge). SQLite files are created owner-only (0600) with secure delete on. For a consent withdrawal run `python tools/purge_training.py --store-dir <dir> --job-id <id> --work-dir <training work folder>`: it removes the job's folder and its line crops and label rows in training datasets, and leaves a marker so a later correction cannot write the data back (the API answers 409); for a cron job use `--days N`. |
 | Store | In-memory by default; `JOB_DB_PATH=/data/jobs.db` for a SQLite file that survives restarts. `DATABASE_URL=postgresql://...` switches to the PostgreSQL store with a work queue (see below). |
 | Uploads | Magic-byte check, size cap, 40-megapixel cap, minimum size, aspect-ratio cap (`MAX_IMAGE_ASPECT`, default 20), whole-request body cap (`MAX_FILES` x `MAX_UPLOAD_BYTES` + 1 MB, refused before auth); Tesseract calls time out after `OCR_TIMEOUT_SECONDS` (60); clear error codes. `MAX_PENDING_JOBS` gives 503 when busy. |
 | TLS | The Docker image serves HTTPS on port 443 itself (see below). Outside Docker: Terminate TLS at your reverse proxy (nginx example below) or use `uvicorn --ssl-keyfile --ssl-certfile`. |
@@ -37,3 +37,22 @@ docker run --rm -p 443:443 -v /secure/tls:/data/tls:ro -e API_KEYS=... visa-ocr:
 (`TLS_CERT` / `TLS_KEY` change the paths.) With no certificate it generates a self-signed one: browsers warn and clients
 need `curl -k`, so use it for testing only. Without Docker: `sudo uvicorn app.main:app --port 443 --ssl-certfile server.crt --ssl-keyfile server.key`
 (ports below 1024 need root on macOS/Linux, or put nginx in front as above). On a Mac, Docker Desktop publishes 443 without sudo.
+
+## Second audit (11 Nov 2026)
+
+A full source audit at commit `56f51d3` confirmed 14 low-severity findings and no higher ones. All 14 are fixed, each
+with a regression test in `tests/test_security_audit_2.py`:
+
+| Area | Change |
+|---|---|
+| Authentication | A blank key value stops the service. Wrong-key throttling no longer depends on the general rate limit |
+| Review decision | MRZ confidence covers every line used; a padded line has no confidence. Name clean-up keeps real names and any removal goes to review. A printed name one or two letters longer or shorter is a mismatch. Fields filled by a second reader are validated. An ID number that was rebuilt or not found next to its label always goes to review |
+| Capacity | Pending-jobs cap is reserved atomically. In-process jobs run on their own pool (`JOB_THREADS`). Image decode runs off the event loop. The card text reader has a time budget and fixed caps. Upload form fields have length limits and are clipped in messages |
+| Job queue | A running worker renews its claim; every write carries the attempt number, so a run that lost its claim cannot overwrite the job. Hint and applicant data are erased with the images when a job ends |
+| Training data | A correction cannot re-create purged data. Training run folders are owner-only, cleaned when a run ends, and expire |
+
+Still open, because source cannot settle them (see the audit's `NEEDS-VALIDATION.md`): request bodies are read before the
+key is checked (put a body-size limit and timeouts on the proxy); PostgreSQL connections are opened per call with no pool;
+model promotion is scored on validation lines that reviewers supply (keep `--activate` off until an operator-held
+validation set exists). The card parser's slow path on very many text lines is now bounded by `MAX_TEXT_LINES` (250).
+

@@ -39,7 +39,7 @@ from local model files only. It never downloads anything. Models are tracked in 
 ## Privacy
 Images are stored only with explicit per-upload consent, with 0700/0600 permissions. The service
 deletes training folders older than `TRAINING_RETENTION_DAYS` (default 30; 0 turns this off) in a background sweep.
-For a consent withdrawal or a cron job use `python tools/purge_training.py --store-dir <dir> --job-id <id>` or `--days N`. Keep the training store off the
+For a consent withdrawal or a cron job use `python tools/purge_training.py --store-dir <dir> --job-id <id> --work-dir <work dir>` or `--days N`. Datasets built for training follow the same rule: `auto_train.py` deletes its line crops, label files and predictions when a run ends and removes run folders older than `--keep-days` (30); everything it writes is owner-only. A model already trained on withdrawn lines is not changed; decide separately whether a withdrawal requires retraining. For folders made before this version run `chmod -R go-rwx <work dir>` once. Keep the training store off the
 internet-facing host.
 
 ## Automatic retraining

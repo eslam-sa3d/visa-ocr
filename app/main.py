@@ -13,17 +13,20 @@ Images are not kept or logged. Exceptions: TRAINING_STORE_DIR is set and the app
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 from . import config, pipeline, security, worker
@@ -66,10 +69,14 @@ async def lifespan(_app):
 app = FastAPI(title="Visa Portal Document OCR", version="0.3.0", lifespan=lifespan)
 app.add_middleware(security.BodyLimit)
 training = TrainingStore()  # disabled unless TRAINING_STORE_DIR is set
+# In-process OCR jobs run on their own small pool, never on the framework's thread pool, so waiting or slow jobs cannot
+# take the threads that answer /healthz and job lookups.
+_ocr_pool = ThreadPoolExecutor(max_workers=config.job_threads(), thread_name_prefix="ocr")
+_shrink_slots: asyncio.Semaphore | None = None      # created on first use, inside the running event loop
 
 if security.weak_plain_keys():
     log.warning("Some API_KEYS values are shorter than 24 characters. Use long random keys (openssl rand -hex 32).")
-if not security.auth_enabled():
+if not security.auth_enabled():       # raises when a key variable is set but holds no usable key: refuse to start
     log.warning("API_KEYS is not set: authentication is OFF. Do not expose this service to a network.")
 
 
@@ -193,41 +200,50 @@ def _process(job_id: str, images: list[bytes], hint: str | None, applicant: Appl
 @app.post("/v1/documents/extract", status_code=202)
 async def extract(
     request: Request,
-    background: BackgroundTasks,
     files: list[UploadFile] = File(...),
-    doc_type_hint: str | None = Form(None),
+    doc_type_hint: str | None = Form(None, max_length=32),
     consent_training: bool = Form(False),
-    expected_nationality: str | None = Form(None),
-    expected_surname: str | None = Form(None),
-    expected_given_names: str | None = Form(None),
-    expected_document_number: str | None = Form(None),
-    expected_birth_date: str | None = Form(None),
-    expected_expiry_date: str | None = Form(None),
+    expected_nationality: str | None = Form(None, max_length=3),
+    expected_surname: str | None = Form(None, max_length=100),
+    expected_given_names: str | None = Form(None, max_length=100),
+    expected_document_number: str | None = Form(None, max_length=30),
+    expected_birth_date: str | None = Form(None, max_length=10),
+    expected_expiry_date: str | None = Form(None, max_length=10),
     owner: str = Depends(security.authenticate),
 ) -> dict:
     security.limiter.check(security.client_id(request, owner))
     if not 1 <= len(files) <= config.max_files():
         raise HTTPException(422, {"code": "bad_file_count", "message": f"Send 1 to {config.max_files()} images"})
-    if store.pending_count() >= config.max_pending_jobs():
+    # Count and reserve in one step: a separate "is there room" check lets concurrent uploads overrun the cap.
+    job = store.create_if_room(request.state.correlation_id, owner, config.max_pending_jobs())
+    if job is None:
         raise HTTPException(503, {"code": "busy", "message": "The service is busy; try again shortly"},
                             headers={"Retry-After": "10"})
-    images: list[bytes] = []
-    for f in files:
-        data = await f.read(config.max_bytes() + 1)
-        validate_image(data, f.content_type)
-        images.append(shrink_for_ocr(data))        # the queue, the readers and the training store all get this one image
-
-    job = store.create(request.state.correlation_id, owner)
-    if consent_training and training.enabled:
-        training.save_images(job.id, images)
-        store.update(job.id, consent_training=True)
-    applicant = _applicant(nationality=expected_nationality, surname=expected_surname, given_names=expected_given_names,
-                           document_number=expected_document_number, birth_date=expected_birth_date,
-                           expiry_date=expected_expiry_date)
-    if getattr(store, "queue", False):
-        store.submit(job.id, images, doc_type_hint, worker.applicant_dict(applicant))
-    else:
-        background.add_task(_process, job.id, images, doc_type_hint, applicant)
+    global _shrink_slots
+    if _shrink_slots is None:
+        _shrink_slots = asyncio.Semaphore(2)       # at most two full-size decodes in memory at a time
+    try:
+        images: list[bytes] = []
+        for f in files:
+            data = await f.read(config.max_bytes() + 1)
+            validate_image(data, f.content_type)
+            async with _shrink_slots:              # decode and resize off the event loop
+                images.append(await run_in_threadpool(shrink_for_ocr, data))   # queue, readers and training store get this image
+        if consent_training and training.enabled:
+            training.save_images(job.id, images)
+            store.update(job.id, consent_training=True)
+        applicant = _applicant(nationality=expected_nationality, surname=expected_surname, given_names=expected_given_names,
+                               document_number=expected_document_number, birth_date=expected_birth_date,
+                               expiry_date=expected_expiry_date)
+        if getattr(store, "queue", False):
+            store.submit(job.id, images, doc_type_hint, worker.applicant_dict(applicant))
+        else:
+            _ocr_pool.submit(_process, job.id, images, doc_type_hint, applicant)
+    except BaseException:
+        store.discard(job.id)                      # give the slot back; nothing was queued
+        if training.enabled:
+            training.remove(job.id)
+        raise
     return {"jobId": job.id, "status": job.status, "correlationId": job.correlation_id}
 
 
@@ -280,7 +296,11 @@ def add_correction(job_id: str, body: CorrectionRequest, owner: str = Depends(se
     if not job.consent_training:
         raise HTTPException(409, {"code": "no_training_consent",
                                   "message": "The applicant did not consent to training use for this job"})
-    training.save_correction(job_id, body.model_dump())
+    try:
+        training.save_correction(job_id, body.model_dump())
+    except FileNotFoundError:                      # purged since the upload (retention, or consent withdrawn)
+        raise HTTPException(409, {"code": "no_training_consent",
+                                  "message": "Training data for this job was removed"}) from None
     return {"stored": True, "lines": len(body.lines)}
 
 

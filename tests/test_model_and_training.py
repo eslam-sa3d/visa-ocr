@@ -229,9 +229,11 @@ def test_training_store_purge(tmp_path):
     import os
     import time
     store = TrainingStore(tmp_path)
+    store.save_images("abc123", [b"\xff\xd8\xff"])
     store.save_correction("abc123", {"reviewer": "r"})
     old = tmp_path / "jobs" / "abc123"
     os.utime(old, (time.time() - 40 * 86400,) * 2)
+    store.save_images("def456", [b"\xff\xd8\xff"])
     store.save_correction("def456", {"reviewer": "r"})
     assert store.purge_older_than(30) == 1
     assert not old.exists() and (tmp_path / "jobs" / "def456").exists()

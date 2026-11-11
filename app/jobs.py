@@ -67,6 +67,20 @@ class JobStore:
             self._jobs[job.id] = (time.time(), job)
         return job
 
+    def create_if_room(self, correlation_id: str, owner: str, limit: int) -> Job | None:
+        """Count pending jobs and insert under one lock, so concurrent uploads cannot overrun the cap."""
+        job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
+        with self._lock:
+            self._purge_locked()
+            if sum(1 for _, j in self._jobs.values() if j.status in PENDING) >= limit:
+                return None
+            self._jobs[job.id] = (time.time(), job)
+        return job
+
+    def discard(self, job_id: str) -> None:
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             self._purge_locked()
@@ -140,6 +154,29 @@ class SqliteJobStore:
             c.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)",
                       (job.id, correlation_id, owner, job.status, job.created_at, time.time(), None, None, 0))
         return job
+
+    def create_if_room(self, correlation_id: str, owner: str, limit: int) -> Job | None:
+        """Count and insert in one write transaction (other processes sharing the file wait on BEGIN IMMEDIATE)."""
+        job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
+        with self._lock:
+            c = self._conn()
+            try:
+                c.execute("BEGIN IMMEDIATE")
+                self._purge(c)
+                n = c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','processing')").fetchone()[0]
+                if n >= limit:
+                    c.execute("ROLLBACK")
+                    return None
+                c.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)",
+                          (job.id, correlation_id, owner, job.status, job.created_at, time.time(), None, None, 0))
+                c.execute("COMMIT")
+            finally:
+                c.close()
+        return job
+
+    def discard(self, job_id: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 
     def get(self, job_id: str) -> Job | None:
         with self._lock, self._conn() as c:

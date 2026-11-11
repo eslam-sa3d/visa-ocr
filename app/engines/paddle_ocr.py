@@ -23,7 +23,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from .. import config
-from ..mrz import find_mrz_lines
+from ..mrz import find_mrz_lines, lines_confidence
 from ..uploads import upscaled_size
 from ..model_registry import Registry
 from ..textutil import dedupe_overlapping, script_of, to_ascii_digits
@@ -40,11 +40,10 @@ def _result_dict(res) -> dict:
     return {}
 
 
-def _mrz_score(texts, scores) -> float | None:
-    """Lowest recognition score among lines that look like MRZ lines (long runs of A-Z, 0-9 and '<')."""
-    vals = [s for t, s in zip(texts, scores)
-            if len(re.sub(r"\s", "", str(t))) >= 25 and re.fullmatch(r"[A-Z0-9<«\s]+", str(t).upper())]
-    return round(min(vals), 4) if vals else None
+def _mrz_score(found, texts, scores) -> float | None:
+    """Lowest recognition score over the detected texts the returned MRZ lines came from; None when a line was padded or
+    adjusted (see mrz.lines_confidence). A short, low-score line 1 must not ride on the score of a clean line 2."""
+    return lines_confidence(found, [str(t) for t in texts], list(scores))
 
 
 class PaddleOcrEngine:
@@ -132,7 +131,7 @@ class PaddleOcrEngine:
                     scores += [float(x) for x in d.get("rec_scores", [])]
                 found = find_mrz_lines(texts)
                 if found:
-                    return found, _mrz_score(texts, scores)
+                    return found, _mrz_score(found, texts, scores)
         return None, None
 
     def _mrz_from_variants(self, images, reader, np, Image, ImageOps):
@@ -155,7 +154,7 @@ class PaddleOcrEngine:
                         scores += [float(x) for x in d.get("rec_scores", [])]
                     found = find_mrz_lines(texts)
                     if found:
-                        return found, _mrz_score(texts, scores)
+                        return found, _mrz_score(found, texts, scores)
         return None, None
 
     # -- extraction --------------------------------------------------------------------
@@ -200,7 +199,7 @@ class PaddleOcrEngine:
         mrz_conf = None
         if mrz:
             en = [l for l in lines if l["lang"] == "en"] or lines
-            mrz_conf = _mrz_score([l["text"] for l in en], [l["score"] or 0 for l in en])
+            mrz_conf = _mrz_score(mrz, [l["text"] for l in lines], [l["score"] or 0 for l in lines])
         elif "en" in readers:
             mrz, mrz_conf = self._mrz_from_bottom_band(images, readers["en"], np, Image, ImageOps)
             if not mrz:

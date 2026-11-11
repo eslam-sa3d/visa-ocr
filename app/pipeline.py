@@ -2,6 +2,8 @@
 review policy. Returns ("done", result) or ("failed", error). No web framework code in here."""
 from __future__ import annotations
 
+from datetime import date
+
 import os
 
 import logging
@@ -63,7 +65,8 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     missing = [k for k in _CARD_FIELDS if not doc.get(k)]
     if doc.get("nationality") and not doc.get("nationalityCode"):
         missing.append("nationality")
-    if not missing or engine_name == "tesseract-mrz":
+    # "ensemble" already took its text from this same Tesseract reader: a second pass would return the same lines at twice the cost
+    if not missing or engine_name in ("tesseract-mrz", "ensemble"):
         return result
     try:
         from .engines.tesseract_text import read_text_lines
@@ -83,10 +86,31 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     if "nationality" in filled:
         doc["nationalityCode"], doc["nationalityName"] = sdoc.get("nationalityCode", ""), sdoc.get("nationalityName", "")
     result["flags"] = [f for f in result["flags"] if not (f["code"].endswith("_not_found") and f["code"].split("_")[0] in filled)]
-    result["flags"].append({"code": "filled_from_second_reader", "severity": "warning",
+    # The first reading was validated before these values existed, so validate them now. With auto-accept on, a filled field
+    # always reaches a person: it came from a second reader and nothing else confirms it.
+    auto = config.visual_zone_auto_accept()
+    codes = {f["code"] for f in result["flags"]}
+    result["flags"].append({"code": "filled_from_second_reader", "severity": "error" if auto else "warning",
                             "message": "Fields the first reader missed were taken from a second reading: " + ", ".join(filled) + ". Check them."})
+    try:
+        if "expiryDate" in filled:
+            if doc.get("expiryCalendar") != "gregorian":
+                if "expiry_hijri_not_checked" not in codes:
+                    result["flags"].append({"code": "expiry_hijri_not_checked", "severity": "error" if auto else "warning",
+                                            "message": "Expiry is a Hijri date; expiry check needs the Gregorian date"})
+            elif date.fromisoformat(doc["expiryDate"]) < date.today() and "document_expired" not in codes:
+                result["flags"].append({"code": "document_expired", "severity": "error", "message": "The document has expired"})
+        if "birthDate" in filled and doc.get("birthCalendar") == "gregorian" and date.fromisoformat(doc["birthDate"]) > date.today():
+            result["flags"].append({"code": "birth_date_in_future", "severity": "error", "message": "Date of birth is in the future"})
+    except ValueError:
+        result["flags"].append({"code": "filled_date_invalid", "severity": "error", "message": "A filled date is not a valid date"})
+    s_scores = second["document"].get("fieldConfidence", {})
     for k in filled:
-        doc.setdefault("fieldConfidence", {})[k] = second["document"].get("fieldConfidence", {}).get(k, 0.5)
+        doc.setdefault("fieldConfidence", {})[k] = s_scores.get(k, 0.5)
+    low = sorted(k for k in filled if s_scores.get(k, 0.5) < config.min_confidence_visual())
+    if low:
+        result["flags"].append({"code": "low_confidence_fields", "severity": "error",
+                                "message": "Low OCR confidence for filled fields: " + ", ".join(low)})
     return result
 
 
@@ -105,7 +129,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             mrz_confidence = None                      # the fallback reports no scores
 
         if not output.mrz_lines and text_lines:
-            result = parse_gcc_id(text_lines)
+            result = parse_gcc_id(text_lines[:config.max_text_lines()])      # bounded: parsing cost grows with the line count
             result = _fill_from_second_reader(result, images, output.engine)
             doc = result["document"]
             found = [k for k in ("idNumber", "nameAr", "nameEn", "nationality", "occupation", "birthDate", "expiryDate", "employer")
@@ -123,7 +147,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             return "failed", {"code": "mrz_not_found", "message": _no_document_message(hint, bool(text_lines))}
 
         result = analyse_mrz(output.mrz_lines)
-        apply_mrz_policy(result, mrz_confidence, text_lines, applicant)
+        apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines)
         result["engine"], result["fields"] = output.engine, _fields_out(output)
         boxes = result["fields"].get("mrzLineBoxes")
         wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data

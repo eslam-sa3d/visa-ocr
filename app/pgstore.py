@@ -2,8 +2,9 @@
 
 The API inserts a job (images included, as bytea) and returns at once; workers claim jobs with
 SELECT ... FOR UPDATE SKIP LOCKED, so each job is processed once even with many workers. Images are erased
-as soon as the job finishes; every row is deleted after JOB_TTL_MINUTES. A worker that dies leaves its job
-'processing'; after JOB_STALE_SECONDS the job is re-queued (up to JOB_MAX_ATTEMPTS, then it fails).
+as soon as the job finishes; every row is deleted after JOB_TTL_MINUTES. A running worker renews its claim
+(heartbeat); a worker that dies stops renewing, and after JOB_STALE_SECONDS the job is re-queued (up to JOB_MAX_ATTEMPTS,
+then it fails). Every write by a run carries its attempt number, so a run that lost its claim cannot overwrite the job.
 
 Enable with DATABASE_URL=postgresql://user:pass@host/db. Use disk encryption / TLS to the database
 (sslmode=require) because rows hold personal data while a job is running.
@@ -60,6 +61,24 @@ class PgJobStore:
                       (job.id, correlation_id, owner, "preparing", job.created_at, time.time()))
         return job
 
+    def create_if_room(self, correlation_id: str, owner: str, limit: int) -> Job | None:
+        """Count pending jobs and insert in one transaction under an advisory lock, so API nodes cannot overrun the cap."""
+        job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
+        with self._conn() as c:
+            self._purge(c)
+            with c.transaction():
+                c.execute("SELECT pg_advisory_xact_lock(7406001)")
+                n = c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('preparing','queued','processing')").fetchone()[0]
+                if n >= limit:
+                    return None
+                c.execute("INSERT INTO jobs (id, correlation_id, owner, status, created_at, created_ts) VALUES (%s,%s,%s,%s,%s,%s)",
+                          (job.id, correlation_id, owner, "preparing", job.created_at, time.time()))
+        return job
+
+    def discard(self, job_id: str) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM jobs WHERE id=%s AND status='preparing'", (job_id,))
+
     def submit(self, job_id: str, images: list[bytes], hint: str | None, applicant: dict) -> None:
         from psycopg.types.json import Jsonb
         with self._conn() as c:
@@ -88,7 +107,7 @@ class PgJobStore:
             elif key == "consent_training":
                 sets.append("consent_training=%s"); vals.append(bool(value))
         if changes.get("status") in ("done", "failed"):
-            sets.append("images=NULL")          # personal data is erased the moment the job finishes
+            sets.append("images=NULL, hint=NULL, applicant=NULL")   # nothing the caller sent outlives the job
         if sets:
             with self._conn() as c:
                 c.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=%s", (*vals, job_id))  # noqa: S608
@@ -104,25 +123,52 @@ class PgJobStore:
     # ---- worker side
     def requeue_stale(self) -> int:
         """Retry jobs whose worker died; fail them after too many attempts."""
-        cutoff = time.time() - config.job_stale_seconds()
-        with self._conn() as c:
-            c.execute("UPDATE jobs SET status='failed', images=NULL, error=%s "
+        from psycopg.types.json import Jsonb
+        now = time.time()
+        cutoff = now - config.job_stale_seconds()
+        with self._conn() as c, c.transaction():        # both steps see one state
+            c.execute("UPDATE jobs SET status='failed', images=NULL, hint=NULL, applicant=NULL, error=%s "
                       "WHERE status='processing' AND locked_ts < %s AND attempts >= %s",
-                      (self._psycopg.types.json.Jsonb({"code": "internal_error", "message": "Processing failed"}), cutoff,
-                       config.job_max_attempts()))
+                      (Jsonb({"code": "internal_error", "message": "Processing failed"}), cutoff, config.job_max_attempts()))
+            # a row left 'preparing' by an API process that stopped between create and submit would hold a slot until the TTL
+            c.execute("DELETE FROM jobs WHERE status='preparing' AND created_ts < %s", (cutoff,))
             return c.execute("UPDATE jobs SET status='queued' WHERE status='processing' AND locked_ts < %s", (cutoff,)).rowcount
 
-    def claim(self) -> tuple[str, list[bytes], str | None, dict] | None:
-        """Take the oldest queued job, or None. Safe with any number of concurrent workers."""
+    def heartbeat(self, job_id: str, token: int) -> bool:
+        """Renew a claim while the job runs. False when this run no longer holds the claim."""
+        with self._conn() as c:
+            return c.execute("UPDATE jobs SET locked_ts=%s WHERE id=%s AND status='processing' AND attempts=%s",
+                             (time.time(), job_id, token)).rowcount == 1
+
+    def finish(self, job_id: str, token: int, status: str, result: dict | None = None, error: dict | None = None) -> bool:
+        """Write the outcome only if this run still holds the claim (same attempt number, still processing). A run that was
+        re-queued or failed by the stale sweep gets False and its result is dropped."""
+        from psycopg.types.json import Jsonb
+        with self._conn() as c:
+            return c.execute("UPDATE jobs SET status=%s, result=%s, error=%s, images=NULL, hint=NULL, applicant=NULL "
+                             "WHERE id=%s AND status='processing' AND attempts=%s",
+                             (status, Jsonb(result) if result is not None else None,
+                              Jsonb(error) if error is not None else None, job_id, token)).rowcount == 1
+
+    def claim(self) -> "Claim | None":
+        """Take the oldest queued job, or None. Safe with any number of concurrent workers. The returned tuple also carries
+        .token (the attempt number), which heartbeat() and finish() need."""
         with self._conn() as c:
             row = c.execute(
                 "UPDATE jobs SET status='processing', attempts=attempts+1, locked_ts=%s "
                 "WHERE id = (SELECT id FROM jobs WHERE status='queued' AND images IS NOT NULL "
                 "ORDER BY created_ts FOR UPDATE SKIP LOCKED LIMIT 1) "
-                "RETURNING id, images, hint, applicant", (time.time(),)).fetchone()
+                "RETURNING id, images, hint, applicant, attempts", (time.time(),)).fetchone()
         if not row:
             return None
-        return row[0], [bytes(b) for b in row[1]], row[2], row[3] or {}
+        claim = Claim((row[0], [bytes(b) for b in row[1]], row[2], row[3] or {}))
+        claim.token = row[4]
+        return claim
+
+
+class Claim(tuple):
+    """(job_id, images, hint, applicant) plus .token, the attempt number that fences this run's writes."""
+    token: int = 0
 
 
 def utcnow() -> str:

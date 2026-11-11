@@ -8,6 +8,8 @@ specimens. Run it on real card images and adjust LABELS before relying on it.
 """
 from __future__ import annotations
 
+import functools
+
 import re
 from datetime import date
 
@@ -125,6 +127,7 @@ def _ordered(lines: list[dict]) -> list[dict]:
     return sorted(lines, key=lambda l: (round(_center(l)[1] / 12), _center(l)[0]))
 
 
+@functools.lru_cache(maxsize=4096)
 def _classify(text: str) -> tuple[str | None, str]:
     """Return (field, text after the label) when the line contains a label; (None, "") otherwise.
     The label that starts earliest wins, then the longest."""
@@ -311,11 +314,15 @@ def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: 
             if fixed:
                 id_number, scores["idNumber"] = fixed, min(found[1].get("score", 1.0), 0.5)
                 repaired_id = True
+    unlabelled_id = False
     if id_number is None:
         for ln in lines:
+            if _classify(ln["text"])[0] not in (None, "idNumber"):
+                continue                     # a number on another field's line (employer ID, a date) is not the holder's number
             m = _ID10.search(re.sub(r"[\s-]", "", ln["_n"]))
             if m:
                 id_number, scores["idNumber"] = m[1], ln.get("score", 1.0)
+                unlabelled_id = True         # not next to an ID label: nothing says this is the holder's number
                 break
     checks: dict[str, bool] = {}
     if id_number:
@@ -323,8 +330,13 @@ def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: 
         doc["kind"] = "iqama" if id_number[0] == "2" else "saudi_national_id"
         checks["id_number"] = saudi_id_check(id_number)
         if repaired_id:
-            flags.append(Flag("id_number_repaired", "warning",
+            # error, not a score cap: a rebuilt number must reach a person whatever the confidence threshold is
+            flags.append(Flag("id_number_repaired", "error",
                               "One digit of the ID number was unreadable and was restored from the check digit. Confirm it against the card."))
+        if unlabelled_id:
+            flags.append(Flag("id_number_unlabelled", "error",
+                              "The ID number was not found next to an ID label; a 10-digit number from elsewhere on the card was used. "
+                              "Confirm it against the card."))
         if not checks["id_number"]:
             flags.append(Flag("id_number_checksum_failed", "error",
                               "The ID number fails the check digit. A digit was probably misread."))

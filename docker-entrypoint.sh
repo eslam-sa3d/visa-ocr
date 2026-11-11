@@ -4,10 +4,13 @@
 set -eu
 umask 077        # files the service creates (database, TLS key, training data) are owner-only
 PORT="${PORT:-443}"
-if [ -z "${API_KEYS:-}" ] && [ -z "${API_KEY_SHA256:-}" ] && [ "${ALLOW_ANONYMOUS:-0}" != "1" ]; then
-  echo "ERROR: no API key is configured (API_KEYS or API_KEY_SHA256). Set one, or set ALLOW_ANONYMOUS=1 for local tests only." >&2
+# Same rule as app/security.py: a value made only of commas or spaces is not a key.
+KEYS_SET="$(printf '%s%s' "${API_KEYS:-}" "${API_KEY_SHA256:-}" | tr -d ', \t\r\n')"
+if [ -z "$KEYS_SET" ] && [ "${ALLOW_ANONYMOUS:-0}" != "1" ]; then
+  echo "ERROR: no usable API key is configured (API_KEYS or API_KEY_SHA256). Set one, or set ALLOW_ANONYMOUS=1 for local tests only." >&2
   exit 1
 fi
+if [ -z "$KEYS_SET" ]; then unset API_KEYS API_KEY_SHA256; fi     # anonymous mode was chosen: drop blank values
 CERT="${TLS_CERT:-/data/tls/server.crt}"
 KEY="${TLS_KEY:-/data/tls/server.key}"
 # Docker creates an empty DIRECTORY when you bind-mount a host path that does not exist (-v /host/server.crt:/data/tls/server.crt).

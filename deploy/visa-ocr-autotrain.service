@@ -6,6 +6,7 @@ After=network.target
 [Service]
 Type=oneshot
 User=visaocr
+UMask=0077
 WorkingDirectory=/opt/visa-ocr
 EnvironmentFile=/etc/visa-ocr/autotrain.env
 # shellcheck disable=SC2086 - AUTOTRAIN_ARGS is split on purpose

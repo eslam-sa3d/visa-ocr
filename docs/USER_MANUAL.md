@@ -163,6 +163,9 @@ Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in
 | `RATE_LIMIT_PER_MIN` | 60 | Per client. 0 turns it off |
 | `MAX_UPLOAD_BYTES` | 10 MB | Per image |
 | `JOB_TTL_MINUTES` | 60 | How long results are kept |
+| `JOB_THREADS` | half the cores | Jobs read at the same time in one container (no PostgreSQL queue) |
+| `OCR_TEXT_SECONDS` | 20 | Time limit for reading a card without an MRZ when `OCR_DEADLINE_SECONDS` is 0 |
+| `BAD_KEY_LIMIT_PER_MIN` | 10 | Wrong-key attempts per client. Applies even when `RATE_LIMIT_PER_MIN` is 0 |
 | `TRAINING_STORE_DIR` | none | Turns on saving consented images and corrections |
 | `TRAINING_RETENTION_DAYS` | 30 | How long training data is kept |
 | `MODELS_DIR` | `./models` | PaddleOCR models and `manifest.json` |
@@ -175,6 +178,10 @@ Set up once on the training server (GPU): `sudo sh deploy/install_autotrain.sh`,
 the new model only if it scores better on real validation lines. Details and the approval step are in
 `MODEL_TRAINING.md`. Workers pick up a new model without a restart. This needs the full image.
 
+Line crops and label files made for a training run are deleted when the run ends. Run folders older than `--keep-days`
+(30) are removed. To withdraw one applicant's consent:
+`python tools/purge_training.py --store-dir <store> --job-id <id> --work-dir <training work folder>`.
+
 ## 8. Troubleshooting
 
 | Problem | Cause | Fix |
@@ -183,7 +190,9 @@ the new model only if it scores better on real validation lines. Details and the
 | Container exits: `... is a directory, not a file` | A mounted certificate path does not exist on the host | Mount the folder that holds `server.crt` and `server.key` |
 | `415 type_mismatch` or `bad_type` | The file is not a real JPEG or PNG | Convert it (HEIC and PDF are not accepted) |
 | `413 too_large` | Image over 10 MB | Reduce it or raise `MAX_UPLOAD_BYTES` |
-| `503 busy` | Too many jobs waiting | Add workers or raise `MAX_PENDING_JOBS` |
+| `503 busy` | Too many jobs waiting | With PostgreSQL: add workers or raise `MAX_PENDING_JOBS`. One container: raise `JOB_THREADS` if cores are free, otherwise wait |
+| Service does not start: `contains no usable key` | `API_KEYS` holds only commas or spaces | Set a real key. A blank value no longer turns authentication off |
+| Correction refused with `409` | The training data for that job was purged | Nothing to do: purged data is not written back |
 | `429 rate_limited` | More than `RATE_LIMIT_PER_MIN` requests from one client | Raise the limit or set it to 0 behind the portal |
 | `mrz_not_found` | No MRZ visible, or blurred, cut off or sideways | Retake the photo; for cards without an MRZ choose "Iqama / GCC ID" |
 | `/readyz` answers `not_ready ... is missing` | `OCR_ENGINE=paddle-ocr` without model files | Fetch the models, or use `ensemble` |

@@ -135,4 +135,10 @@ def test_name_cross_check_flags_misread_mrz_name():
 
 def test_truncated_names_are_not_a_mismatch():
     from app.validation import check_name_against_visual as chk
-    assert chk("SHOEIB", "OMAR SOBHY IBRAHIM IBRA", [{"text": "SHOEIB, OMAR SOBHY IBRAHIM IB"}]) == []
+    from app.validation import visual_name_status as status
+    printed = [{"text": "SHOEIB, OMAR SOBHY IBRAHIM IBRAHIM"}]
+    # a real truncation: the MRZ name field is full and the printed name is the longer one
+    assert status("SHOEIB", "OMAR SOBHY IBRAHIM IBRA", printed, name_field_full=True)[0] == "match"
+    # a printed line shorter than the MRZ name is never a "cut name": only the MRZ side is cut to fit
+    assert [f.code for f in chk("SHOEIB", "OMAR SOBHY IBRAHIM IBRA", [{"text": "SHOEIB, OMAR SOBHY IBRAHIM IB"}])] \
+        == ["name_differs_from_visual_zone"]

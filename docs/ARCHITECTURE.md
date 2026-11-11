@@ -43,7 +43,8 @@ flowchart LR
 2. **Reduce.** A photo larger than `WORK_MAX_SIDE` (2000 pixels) is turned upright and reduced. A 12-megapixel phone
    photo otherwise takes about five times longer and four times the memory.
 3. **Queue.** The job goes into the store and the API answers `202` with a `jobId`. With PostgreSQL the images sit in
-   the queue until a worker takes them, and are erased the moment the job finishes.
+   the queue until a worker takes them, and are erased the moment the job finishes. A running worker renews its claim, so
+   only a job whose worker has stopped is given to another worker.
 4. **Read.** The worker runs the engine chosen by `OCR_ENGINE`:
    - `ensemble`: Tesseract and RapidOCR read the page side by side. The page tilt is estimated first.
    - `auto` (default): PaddleOCR when it is installed with its models, with the pair above as fallback and second opinion.
@@ -67,6 +68,7 @@ flowchart LR
 | `OCR_DEADLINE_SECONDS` | 0 (off) | Hard limit per read; readers return the best reading in hand. Use 1.7 for a 2-second total |
 | `OCR_SEARCH_SECONDS` | 8 | Tesseract search budget when there is no hard limit |
 | `OCR_SECOND_READER_SECONDS` | 1.5 | RapidOCR stops improving a reading after this |
+| `OCR_TEXT_SECONDS` | 20 | Limit for the card text reader when no hard limit is set. With a hard limit, that limit applies to cards too |
 
 ## 4. Learning loop
 
@@ -88,6 +90,7 @@ so it does not benefit from retraining.
 | Result (personal data) | Job store | `JOB_TTL_MINUTES`, default 60 |
 | Raw text lines | In the result only when `INCLUDE_TEXT_LINES=1` | Same as the result |
 | Consented images and corrections | Training store, owner-only files | `TRAINING_RETENTION_DAYS`, default 30 |
+| Line crops and labels for a training run | Training work folder, owner-only | Deleted when the run ends |
 | Logs | Standard output | No images, no field values |
 
 Security controls (API keys, rate limits, TLS, headers) are in `SECURITY.md`.

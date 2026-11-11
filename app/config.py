@@ -46,8 +46,12 @@ def min_confidence_visual() -> float: return _float("MIN_CONFIDENCE_VISUAL", 0.8
 def visual_zone_auto_accept() -> bool: return _flag("VISUAL_ZONE_AUTO_ACCEPT")                # default: always human review
 def database_url() -> str: return os.environ.get("DATABASE_URL", "")        # postgresql://... enables the PostgreSQL queue
 def worker_threads() -> int: return max(0, _int("WORKER_THREADS", 1))       # in-process workers when using PostgreSQL (0 = API only)
-def job_stale_seconds() -> int: return _int("JOB_STALE_SECONDS", 300)       # a claimed job older than this is retried
-def job_max_attempts() -> int: return _int("JOB_MAX_ATTEMPTS", 3)
+def job_stale_seconds() -> int: return max(30, _int("JOB_STALE_SECONDS", 300))   # a claim not renewed for this long is retried
+def job_max_attempts() -> int: return max(1, _int("JOB_MAX_ATTEMPTS", 3))
+def job_threads() -> int:                                                   # in-process OCR jobs at a time (no PostgreSQL queue)
+    return max(1, _int("JOB_THREADS", max(1, (os.cpu_count() or 2) // 2)))
+def text_read_seconds() -> float: return max(1.0, _float("OCR_TEXT_SECONDS", 20.0))   # ID-card text reader budget with no deadline
+def max_text_lines() -> int: return max(20, _int("MAX_TEXT_LINES", 250))    # OCR lines parsed per card job
 
 
 def ocr_deadline() -> float:

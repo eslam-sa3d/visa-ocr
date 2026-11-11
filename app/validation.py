@@ -26,6 +26,16 @@ def validate(r: MrzResult, today: date | None = None) -> list[Flag]:
         if not ok:
             flags.append(Flag("mrz_checksum_failed", "error", f"Check digit failed: {name}"))
 
+    # The name line has no check digit. When letters were removed from it as "misread fillers", or no surname is left, nothing
+    # proves the result, so a person confirms the name.
+    removed = [c for c in r.corrected_fields if "filler read as letters removed" in c]
+    if removed:
+        flags.append(Flag("mrz_name_letters_removed", "error",
+                          "Letters at the end of the name line were treated as misread fillers and removed ("
+                          + ", ".join(removed) + "). Confirm the name against the document."))
+    if not (r.surname or "").strip():
+        flags.append(Flag("mrz_surname_missing", "error", "No surname could be read from the MRZ. Check the name."))
+
     if r.corrected_fields:
         flags.append(Flag("ocr_digits_corrected", "warning",
                           "Look-alike characters were corrected in numeric positions: "
@@ -120,10 +130,11 @@ def check_expected_nationality(r: MrzResult, expected: str | None) -> list[Flag]
                  f"Declared nationality {code} does not match the document ({r.nationality})")]
 
 
-def visual_name_status(surname: str, given: str, text_lines: list[dict]) -> tuple[str, str]:
+def visual_name_status(surname: str, given: str, text_lines: list[dict], name_field_full: bool = False) -> tuple[str, str]:
     """Compare the MRZ name with the name printed on the page. Returns (status, printed_text) where status is
-    'match' (identical, or one is a cut-off version of the other), 'mismatch' (a near miss: one side was
-    probably misread) or 'none' (nothing comparable was read from the page)."""
+    'match' (identical, or a real truncation: the MRZ name field is full and the printed name starts with the MRZ name),
+    'mismatch' (a near miss, including one or two letters added or lost at the end: one side was probably misread) or
+    'none' (nothing comparable was read from the page)."""
     from difflib import SequenceMatcher
 
     def letters(t: str) -> str:
@@ -132,19 +143,26 @@ def visual_name_status(surname: str, given: str, text_lines: list[dict]) -> tupl
     mrz_name = letters(surname + given)
     if len(mrz_name) < 4:
         return "none", ""
-    best, best_text = 0.0, ""
+    best, best_text, cut_text = 0.0, "", ""
     for ln in text_lines or []:
         text = str(ln.get("text", ""))
         if not re.search(r"[A-Za-z]{2}", text) or re.search(r"[<0-9]", text):
             continue
         v = letters(text)
-        if abs(len(v) - len(mrz_name)) > 2 or len(v) < 4:
+        if len(v) < 4:
             continue
-        if mrz_name.startswith(v) or v.startswith(mrz_name):   # names are cut to fit; a cut name is not a misread
+        if v == mrz_name:
             return "match", text.strip()
+        if name_field_full and v.startswith(mrz_name):      # only the MRZ side is ever cut to fit
+            cut_text = cut_text or text.strip()
+            continue
+        if abs(len(v) - len(mrz_name)) > 2:
+            continue
         ratio = SequenceMatcher(None, mrz_name, v).ratio()
         if ratio > best:
             best, best_text = ratio, text.strip()
+    if cut_text:
+        return "match", cut_text
     if best >= 0.75:
         return "mismatch", best_text
     return "none", ""
