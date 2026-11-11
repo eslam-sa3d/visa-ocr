@@ -9,3 +9,4 @@ photos/
 *.tgz
 models/*
 !models/manifest.json
+.local/
