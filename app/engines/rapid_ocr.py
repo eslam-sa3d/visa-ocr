@@ -83,6 +83,7 @@ class RapidOcrEngine:
         hard = budget * 3
         best, best_conf, best_score, best_fields = None, None, -2, {}
         lone = None        # a passport line 2 read on its own, when no complete MRZ was found
+        name_lines: list[str] = []      # passport name lines seen without a matching line 2
         page_text: list[dict] = []
         seen_text: set[str] = set()
         with self._lock:
@@ -142,6 +143,15 @@ class RapidOcrEngine:
                         lines = find_mrz_lines(texts)
                         if not lines:
                             lone = lone or lone_passport_line2(texts)
+                            # A name line seen in one attempt and line 2 in another still make a complete MRZ.
+                            name_lines += [tx for tx in texts if re.fullmatch(r"P[A-Z<][A-Z<]{3}[A-Z<]{7,39}", tx) and "<<" in tx]
+                            if lone and name_lines:
+                                for cand in sorted(set(name_lines), key=len, reverse=True):
+                                    lines = find_mrz_lines([cand, lone])
+                                    if lines and self._score(lines)[1]:
+                                        break
+                                    lines = None
+                        if not lines:
                             continue
                         score, perfect = self._score(lines)
                         if score > best_score:
