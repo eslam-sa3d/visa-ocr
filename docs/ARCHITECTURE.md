@@ -46,7 +46,9 @@ flowchart LR
    the queue until a worker takes them, and are erased the moment the job finishes. A running worker renews its claim, so
    only a job whose worker has stopped is given to another worker.
 4. **Read.** The worker runs the engine chosen by `OCR_ENGINE`:
-   - `ensemble`: Tesseract and RapidOCR read the page side by side. The page tilt is estimated first.
+   - `ensemble`: the MRZ strip is located first by its shape (two or three long rows of evenly spaced characters, in any
+     page orientation), cut out, levelled and enlarged. Tesseract and RapidOCR then read that strip side by side. If no
+     strip is found, both fall back to searching the whole page.
    - `auto` (default): PaddleOCR when it is installed with its models, with the pair above as fallback and second opinion.
    - Cards without an MRZ (Iqama, GCC IDs): the text reader (Arabic and English) reads rows, re-reads weak rows, fills
      dropped rows, and re-reads the ID number with digits only.

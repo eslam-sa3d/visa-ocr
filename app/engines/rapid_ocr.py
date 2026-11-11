@@ -15,6 +15,7 @@ from .. import config as app_config
 from ..mrz import MrzError, find_mrz_lines, lines_confidence, lone_passport_line2, parse_mrz
 from ..uploads import upscaled_size
 from .base import EngineOutput, EngineUnavailable
+from .mrz_band import enlarge as enlarge_strip, find_bands, text_rows
 from .tesseract_mrz import _estimate_tilt
 
 _FILLER_LIKE = str.maketrans({">": "<", "«": "<", "‹": "<", "＜": "<", "《": "<", "〈": "<", "人": "<", "く": "<", " ": "", "\t": ""})   # 人 and く: how this model reads a filler on small print
@@ -24,10 +25,25 @@ def normalise(text: str) -> str:
     return str(text).upper().translate(_FILLER_LIKE)
 
 
+def restore_fillers(text: str) -> str:
+    """This reader merges repeated fillers ('<<' comes out as '<'), which shortens a line and shifts everything after it.
+    For a passport line 2 the check digits say which reading is right: each filler run is lengthened in turn until the line
+    is 44 characters and every check passes. Any other text is returned unchanged."""
+    if not (36 <= len(text) <= 43) or not re.fullmatch(r"[A-Z0-9<]+", text) or "<" not in text or not re.search(r"\d{6}", text):
+        return text
+    missing = 44 - len(text)
+    for m in re.finditer(r"<+", text):
+        cand = text[:m.end()] + "<" * missing + text[m.end():]
+        if lone_passport_line2([cand]):
+            return cand
+    return text
+
+
 class RapidOcrEngine:
     name = "rapid-ocr"
 
     def __init__(self) -> None:
+        self._page_cost = 1.2      # seconds one full-page reading takes on this machine; measured as it runs
         self._reader = None
         self._lock = threading.Lock()                  # the ONNX session is shared; read one image at a time
 
@@ -38,7 +54,23 @@ class RapidOcrEngine:
             except ImportError as exc:
                 raise EngineUnavailable("rapidocr-onnxruntime is not installed") from exc
             self._reader = RapidOCR()
+            self._calibrate()
         return self._reader
+
+    def _calibrate(self) -> None:
+        """Time one full-page reading on this machine, once, so a hard time limit can be respected from the first request."""
+        try:
+            import numpy as np  # noqa: WPS433
+            from PIL import Image, ImageDraw  # noqa: WPS433
+            page = Image.new("RGB", (1100, 780), "white")
+            d = ImageDraw.Draw(page)
+            for i in range(14):
+                d.text((60, 40 + i * 50), "SPECIMEN PAGE TEXT 0123456789 UTOPIA " * 2, fill="black")
+            t0 = time.monotonic()
+            self._reader(np.array(page))
+            self._page_cost = max(0.2, (time.monotonic() - t0) * 1.3)
+        except Exception:  # noqa: BLE001 - keep the default estimate
+            pass
 
     @staticmethod
     def _score(lines: list[str]) -> tuple[int, bool]:
@@ -54,6 +86,56 @@ class RapidOcrEngine:
         scores = [float(r[2]) for r in (result or [])]
         self._last_polys = [r[0] for r in (result or [])]
         return texts, scores
+
+    def _read_rows(self, reader, strip, np) -> tuple[list[str], list[float]]:
+        """Recognise each text row of a level strip directly (no text detection). Empty when the strip has no clear rows."""
+        rows = text_rows(strip)
+        if not 2 <= len(rows) <= 14:
+            return [], []
+        texts, scores = [], []
+        for top, bottom in rows[-6:]:                      # the MRZ is the last rows of a strip that holds more
+            pad = int((bottom - top) * 0.35) + 2
+            crop = strip.crop((0, max(0, top - pad), strip.width, min(strip.height, bottom + pad)))
+            result, _ = reader(np.array(crop), use_det=False, use_cls=False, use_rec=True)
+            if result:
+                texts.append(restore_fillers(normalise(result[0][1])))
+                scores.append(float(result[0][2]))
+        return texts, scores
+
+    def page_text(self, images: list[bytes], seconds: float) -> list[dict]:
+        """The printed part of the page (name, country code, sex ...) for the review rules to compare with the MRZ. One reading
+        per image at about 1100 pixels wide, tried also a quarter turn round when the first finds little; stops at `seconds`."""
+        try:
+            import numpy as np  # noqa: WPS433
+            from PIL import Image, ImageOps  # noqa: WPS433
+        except ImportError:
+            return []
+        reader = self._load()
+        out: list[dict] = []
+        seen: set[str] = set()
+        started = time.monotonic()
+        with self._lock:
+            for raw in images:
+                img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+                for turn in (0, 90, 270):
+                    if time.monotonic() - started + self._page_cost > seconds:
+                        return out                         # a reading would not finish in the time given
+                    view = img if not turn else img.rotate(turn, expand=True)
+                    target = 1100
+                    if view.width != target:
+                        f = min(3.0, target / float(view.width))
+                        view = view.resize((max(1, int(view.width * f)), max(1, int(view.height * f))), Image.LANCZOS)
+                    t0 = time.monotonic()
+                    texts, scores = self._read(reader, view, np)
+                    self._page_cost = 0.7 * self._page_cost + 0.3 * (time.monotonic() - t0)
+                    words = [t for t in texts if re.fullmatch(r"[A-Z][A-Z,./' -]{3,}", t)]
+                    for tx, sc in zip(texts, scores):
+                        if "<" not in tx and tx not in seen and len(out) < 150:
+                            seen.add(tx)
+                            out.append({"text": tx, "score": round(float(sc), 3)})
+                    if len(words) >= 4:
+                        break                              # this way up reads as text: no need to turn the page
+        return out
 
     def _line_boxes(self, lines: list[str], texts: list[str], index: int, scale: float, y_off: int) -> list[dict] | None:
         """Where each MRZ line sits on the uploaded image, in its own pixels (x1, y1, x2, y2). A reviewer's correction is saved
@@ -91,6 +173,37 @@ class RapidOcrEngine:
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
                 # The estimated tilt is tried first. Each view is read at its own size first (fast), and enlarged only if
                 # that reading is not perfect: enlarging a page that is already big enough only makes detection slower.
+                # First the MRZ strip alone, located by its shape: small, level and enlarged, in any page orientation.
+                t_strip = time.monotonic()
+                tried_strip = False
+                for band in find_bands(img.convert("L")):
+                    tried_strip = True
+                    for flip in (0, 180):
+                        if deadline and time.monotonic() - t_strip > deadline * 0.6:
+                            break
+                        strip = enlarge_strip(band.image if not flip else band.image.rotate(180), 1600).convert("RGB")
+                        # Each row of the strip is recognised on its own. Letting the text detector cut the rows out first
+                        # is slower and often trims the first characters of a line.
+                        texts, scores = self._read_rows(reader, strip, np)
+                        lines = find_mrz_lines(texts) if texts else None
+                        if not lines and strip.height <= 420 and not (deadline and time.monotonic() - t_strip > deadline * 0.5):
+                            texts, scores = self._read(reader, strip, np)          # rows not clear: let the detector find them
+                            lines = find_mrz_lines(texts)
+                        if not lines:
+                            lone = lone or lone_passport_line2(texts)
+                            continue
+                        score, perfect = self._score(lines)
+                        if score > best_score:
+                            best, best_score = lines, score
+                            best_conf = lines_confidence(lines, texts, scores)
+                            ok_rows = band.rows and not flip and len(band.rows) == len(lines)
+                            best_fields = {"mrzLineBoxes": [{"image": index, "box": r} for r in band.rows]} if ok_rows else {}
+                        if perfect:
+                            best_fields["textLines"] = page_text
+                            return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf, fields=best_fields)
+                        break                              # read, not perfect: the other way up will not be better
+                # Under a hard limit, one full-page reading follows at most: it also collects the printed text of the page.
+                page_reads_left = 1 if deadline else 99
                 tilt = _estimate_tilt(img.convert("L"), Image)
                 angles = [0, 3, -3, 5, -5]
                 if abs(tilt) >= 2:
@@ -121,6 +234,10 @@ class RapidOcrEngine:
                             elif enlarge and frac == 1.0 and native_width <= 1200:
                                 continue                   # could not be enlarged and the first reading covered this size
                         elapsed = time.monotonic() - started
+                        if page_reads_left <= 0:
+                            continue
+                        if deadline and tried_strip and (time.monotonic() - t_strip) + self._page_cost > deadline:
+                            continue                       # a page reading does not fit in the time left on this machine
                         if deadline:
                             # Under a hard limit, start an attempt only if it should finish in time. Its cost is estimated
                             # from the last attempt, scaled by image area.
@@ -131,9 +248,11 @@ class RapidOcrEngine:
                         elif elapsed > hard and not best:
                             break                          # nothing found and well over time: give up on this image
                         ran = True
+                        page_reads_left -= 1
                         t0 = time.monotonic()
                         texts, scores = self._read(reader, part, np)
                         last_cost, last_area = time.monotonic() - t0, part.width * part.height
+                        self._page_cost = 0.7 * self._page_cost + 0.3 * last_cost
                         # Page text from every attempt on this image: the MRZ is often read from the enlarged bottom strip, which
                         # does not contain the printed name.
                         for tx, sc in zip(texts, scores):

@@ -173,6 +173,7 @@ Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in
 | `OCR_TEXT_SECONDS` | 20 | Time limit for reading a card without an MRZ when `OCR_DEADLINE_SECONDS` is 0 |
 | `WORKER_POLL_SECONDS` | 0.2 | How often an idle worker checks the PostgreSQL queue |
 | `API_DOCS` | off | Set to 1 to serve `/docs` and `/openapi.json` (they need no key; keep off in production) |
+| `TESSERACT_LANG`, `TESSERACT_DATA_DIR` | auto | Tesseract model for the MRZ. An OCR-B model is used automatically when `models/tessdata/ocrb_int.traineddata` (or `ocrb.traineddata`) exists; it reads MRZ print much better than the stock English model |
 | `OPTIONAL_DATA_REVIEW` | off | Set to 1 to force review when the two readers differ only inside a passport's optional data (personal number) |
 | `BAD_KEY_LIMIT_PER_MIN` | 10 | Wrong-key attempts per client. Applies even when `RATE_LIMIT_PER_MIN` is 0 |
 | `TRAINING_STORE_DIR` | none | Turns on saving consented images and corrections |

@@ -8,6 +8,7 @@ Agreement is only trusted when every check digit passes: two engines can share a
 from __future__ import annotations
 
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -52,8 +53,15 @@ def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
         return None
     if not (pa.valid and pb.valid) or pa.format in ("MRVA", "MRVB") or pa.corrected_fields or pb.corrected_fields:
         return None
-    if any(getattr(pa, f) != getattr(pb, f) for f in _KEY_FIELDS):
+    name_a, name_b = (a[2], b[2]) if len(a) == 3 else (a[0], b[0])
+    same_names = _squash([name_a]) == _squash([name_b])
+    if any(getattr(pa, f) != getattr(pb, f) for f in _KEY_FIELDS if not (same_names and f in ("surname", "given_names"))):
         return None
+    if same_names and name_a != name_b:              # keep the name line whose filler counts make a well-formed line
+        keep = name_a if name_a.count("<") >= name_b.count("<") else name_b
+        a = [keep if ln == name_a else ln for ln in a]
+        b = [keep if ln == name_b else ln for ln in b]
+        pa, pb = parse_mrz(a), parse_mrz(b)
     if len(a) != len(b) or any(len(x) != len(y) for x, y in zip(a, b)):
         return None
     merged = []
@@ -71,6 +79,12 @@ def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
     except MrzError:
         return a
     return merged if pm.valid and all(getattr(pm, f) == getattr(pa, f) for f in _KEY_FIELDS) else a
+
+
+def _squash(lines: list[str]) -> list[str]:
+    """Lines with every run of fillers reduced to one. RapidOCR reads the letters and digits of an MRZ well but cannot count
+    repeated fillers (its decoder merges them), so two readings are compared on what they say, not on how many '<' they show."""
+    return [re.sub(r"<+", "<", ln).rstrip("<") for ln in lines]
 
 
 def _repairs(lines: list[str]) -> int:
@@ -95,6 +109,10 @@ def _agreed_fields(a: list[str], b: list[str]) -> list[str]:
                                     ("issuingState", ("issuing_state",)), ("documentType", ("type_code",)),
                                     ("names", ("surname", "given_names")))
            if all(getattr(pa, x) == getattr(pb, x) for x in attrs)]
+    # The name line, compared on its letters and where its fillers are, not on how many fillers there are (see _squash).
+    name_a, name_b = (a[2], b[2]) if len(a) == 3 else (a[0], b[0])
+    if _squash([name_a]) == _squash([name_b]):
+        out += [f for f in ("names", "issuingState", "documentType") if f not in out]
     if "names" in out and any("filler read as letters removed" in c for c in pa.corrected_fields + pb.corrected_fields):
         out.remove("names")          # a name that needed letters removed is not evidence
     return out
@@ -124,6 +142,8 @@ class EnsembleEngine:
         left = None
         if started is not None and app_config.ocr_deadline():
             left = max(0.0, app_config.ocr_deadline() - (time.monotonic() - started))
+            if left < 0.3:
+                return {}        # the MRZ search used the whole limit; a card without an MRZ needs its document type chosen
         try:
             lines = read_text_lines(images, budget_seconds=left)
         except EngineUnavailable:
@@ -167,8 +187,29 @@ class EnsembleEngine:
             return t
         # Why a result was or was not confirmed, for the reviewer and for support: which reader found the MRZ, how long each
         # took, and where the two readings differ.
+        # The printed page is only needed when the two readers do not settle everything between them. It is read then, in
+        # whatever time is left (always when there is no hard limit).
+        settled = bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines and _score(t.mrz_lines)[1]
+        if (t.mrz_lines or r.mrz_lines) and not settled and not (r.fields or {}).get("textLines"):
+            limit = app_config.ocr_deadline()
+            left = (limit - (time.monotonic() - started)) if limit else 6.0
+            if left > 0.5:
+                try:
+                    t0 = time.monotonic()
+                    r.fields = {**(r.fields or {}), "textLines": self.rapid.page_text(images, left)}
+                    took["pageText"] = round(time.monotonic() - t0, 2)
+                except Exception:  # noqa: BLE001 - the page text is extra evidence, never a reason to fail the read
+                    pass
         readers = {"tesseract": bool(t.mrz_lines), "rapidocr": bool(r.mrz_lines), "seconds": took,
                    "agree": bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines, "differences": _differences(t.mrz_lines, r.mrz_lines)}
+        if t.mrz_lines and r.mrz_lines and t.mrz_lines != r.mrz_lines and _squash(t.mrz_lines) == _squash(r.mrz_lines):
+            # Same letters and digits in the same order; only the filler counts differ. Keep the reading whose counts make a
+            # valid MRZ, and treat the two as agreeing.
+            keep = next((x for x in (t, r) if _score(x.mrz_lines)[1]), None)
+            if keep is not None:
+                readers["agree"] = "same characters, filler counts differ"
+                return EngineOutput(engine=self.name, mrz_lines=keep.mrz_lines, mrz_confidence=agreement_confidence(),
+                                    fields={**r.fields, "readers": readers, "agreedFields": list(_ALL_FIELDS)})
         if t.mrz_lines and r.mrz_lines and t.mrz_lines == r.mrz_lines:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None
@@ -202,9 +243,9 @@ class EnsembleEngine:
         if not candidates:
             return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images, started))
         # Best check-digit score wins. On a tie the cleaner reading wins: one that needed no repair and no letters removed from
-        # the name line (a filler run read as K, S, E ... is the usual damage). Then Tesseract, listed first.
-        best = max(candidates, key=lambda x: (_score(x.mrz_lines)[0], -_repairs(x.mrz_lines)))
-        extra = {**(r.fields if r.mrz_lines else {}), "readers": readers}   # line positions, for reviewer corrections
+        # the name line, and then the one with more fillers (a filler run read as K, S, E ... is the usual damage).
+        best = max(candidates, key=lambda x: (_score(x.mrz_lines)[0], -_repairs(x.mrz_lines), "".join(x.mrz_lines).count("<")))
+        extra = {**(r.fields if r.mrz_lines else {"textLines": (r.fields or {}).get("textLines") or []}), "readers": readers}
         agreed = _agreed_fields(t.mrz_lines, r.mrz_lines) if t.mrz_lines and r.mrz_lines else []
         if agreed:
             readers["agree"] = "fields: " + ", ".join(agreed)
