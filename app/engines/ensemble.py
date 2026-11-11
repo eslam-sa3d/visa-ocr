@@ -8,7 +8,10 @@ Agreement is only trusted when every check digit passes: two engines can share a
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+
+from .. import config as app_config
 
 from ..mrz import MrzError, parse_mrz
 from .base import EngineOutput, EngineUnavailable
@@ -34,10 +37,14 @@ def _score(lines):
 
 class EnsembleEngine:
     @staticmethod
-    def _text_fields(images) -> dict:
-        """No MRZ on the page (Iqama, GCC IDs): return Arabic + English text lines for the ID-card reader."""
+    def _text_fields(images, started: float | None = None) -> dict:
+        """No MRZ on the page (Iqama, GCC IDs): return Arabic + English text lines for the ID-card reader. `started` is when
+        this job's reading began: with a hard limit set, the text read only gets what the MRZ search left of it."""
+        left = None
+        if started is not None and app_config.ocr_deadline():
+            left = max(0.0, app_config.ocr_deadline() - (time.monotonic() - started))
         try:
-            lines = read_text_lines(images)
+            lines = read_text_lines(images, budget_seconds=left)
         except EngineUnavailable:
             return {}
         return {"textLines": lines} if lines else {}
@@ -49,6 +56,7 @@ class EnsembleEngine:
         self.rapid = RapidOcrEngine()
 
     def extract(self, images, doc_type_hint):
+        started = time.monotonic()
         if doc_type_hint in ("iqama", "gcc_id"):                 # no MRZ on these cards: skip the slow MRZ search
             fields = self._text_fields(images)
             if fields:
@@ -65,7 +73,7 @@ class EnsembleEngine:
                 r = None
         if r is None:
             if not t.mrz_lines:
-                t.fields = self._text_fields(images)
+                t.fields = self._text_fields(images, started)
             return t
         if t.mrz_lines and r.mrz_lines and t.mrz_lines == r.mrz_lines:
             score, perfect = _score(t.mrz_lines)
@@ -73,7 +81,7 @@ class EnsembleEngine:
             return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields=r.fields)
         candidates = [x for x in (t, r) if x.mrz_lines]
         if not candidates:
-            return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images))
+            return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images, started))
         best = max(candidates, key=lambda x: _score(x.mrz_lines)[0])      # ties keep Tesseract (listed first)
         return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None,
                             fields=r.fields if r.mrz_lines else {})   # line positions, for reviewer corrections

@@ -147,6 +147,10 @@ Form fields for upload: `files` (1 to 4), `doc_type_hint` (`passport`, `visa`, `
 Other endpoints: `POST /v1/mrz/parse` (check MRZ text you already have), `POST /v1/jobs/{id}/corrections`,
 `GET /v1/models`, `GET /healthz`, `GET /readyz`. Full request and response samples are in `API_EXAMPLES.md`.
 
+To test an installation end to end: `python tools/system_test.py --url https://server --key <key>` (functional and
+security checks) and `python tools/perf_test.py --url https://server --key <key> --phase latency`. Results of the last
+run are in `TEST_REPORT.md`.
+
 Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in the portal.
 
 ## 6. Main settings
@@ -165,6 +169,8 @@ Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in
 | `JOB_TTL_MINUTES` | 60 | How long results are kept |
 | `JOB_THREADS` | half the cores | Jobs read at the same time in one container (no PostgreSQL queue) |
 | `OCR_TEXT_SECONDS` | 20 | Time limit for reading a card without an MRZ when `OCR_DEADLINE_SECONDS` is 0 |
+| `WORKER_POLL_SECONDS` | 0.2 | How often an idle worker checks the PostgreSQL queue |
+| `API_DOCS` | off | Set to 1 to serve `/docs` and `/openapi.json` (they need no key; keep off in production) |
 | `BAD_KEY_LIMIT_PER_MIN` | 10 | Wrong-key attempts per client. Applies even when `RATE_LIMIT_PER_MIN` is 0 |
 | `TRAINING_STORE_DIR` | none | Turns on saving consented images and corrections |
 | `TRAINING_RETENTION_DAYS` | 30 | How long training data is kept |

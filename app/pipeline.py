@@ -161,7 +161,9 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
     except MrzError as exc:
         return "failed", {"code": "mrz_unsupported", "message": str(exc)}
     except Exception as exc:  # noqa: BLE001 - never leak image data or internals
-        if type(exc).__name__ in _DECODE_ERRORS:
+        broken = isinstance(exc, (OSError, SyntaxError, ValueError)) and any(
+            w in str(exc).lower() for w in ("truncated", "broken data stream", "cannot identify image", "image file", "decoder"))
+        if type(exc).__name__ in _DECODE_ERRORS or broken:     # a cut-off or damaged upload is the caller's file, not a fault here
             log.warning("unreadable image: %s", type(exc).__name__)
             return "failed", {"code": "invalid_image", "message": "The image could not be decoded. Upload the photo again."}
         log.exception("processing failed")

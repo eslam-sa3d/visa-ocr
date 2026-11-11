@@ -65,12 +65,14 @@ def work_once(store, engine_getter: Callable = get_engine) -> bool:
     return True
 
 
-def worker_loop(store, stop: threading.Event, engine_getter: Callable = get_engine, idle: float = 0.5) -> None:
+def worker_loop(store, stop: threading.Event, engine_getter: Callable = get_engine, idle: float | None = None) -> None:
+    idle = config.worker_poll_seconds() if idle is None else idle
     last_sweep = 0.0
     while not stop.is_set():
         try:
             if time.time() - last_sweep > 30:
                 store.requeue_stale()
+                getattr(store, "sweep", lambda: None)()                           # expired rows are deleted here too, not only by the API nodes
                 last_sweep = time.time()
             if not work_once(store, engine_getter):
                 stop.wait(idle)

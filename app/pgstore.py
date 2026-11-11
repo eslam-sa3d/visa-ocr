@@ -11,6 +11,8 @@ Enable with DATABASE_URL=postgresql://user:pass@host/db. Use disk encryption / T
 """
 from __future__ import annotations
 
+import contextlib
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +26,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   result JSONB, error JSONB, consent_training BOOLEAN DEFAULT FALSE,
   hint TEXT, applicant JSONB, images BYTEA[], attempts INT DEFAULT 0, locked_ts DOUBLE PRECISION);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, created_ts);
+CREATE INDEX IF NOT EXISTS jobs_created ON jobs (created_ts);
 """
 
 
@@ -35,11 +38,27 @@ class PgJobStore:
         self._psycopg = psycopg
         self._url = url or config.database_url()
         self._ttl = ttl_seconds
+        self._local = threading.local()
         with self._conn() as c:
             c.execute(SCHEMA)
 
+    @contextlib.contextmanager
     def _conn(self):
-        return self._psycopg.connect(self._url, autocommit=True, connect_timeout=5)
+        """One connection per thread, kept open and reused. Opening a connection for every call made status polling the most
+        expensive thing the service did (measured: 80 clients polling a small server cut reading throughput to a fifth).
+        The number of connections is bounded by the number of threads; each statement has a time limit."""
+        c = getattr(self._local, "c", None)
+        if c is None or c.closed or c.broken:
+            c = self._psycopg.connect(self._url, autocommit=True, connect_timeout=5,
+                                      options=f"-c statement_timeout={config.db_statement_timeout_ms()} -c lock_timeout=5000")
+            self._local.c = c
+        try:
+            yield c
+        except self._psycopg.OperationalError:
+            with contextlib.suppress(Exception):
+                c.close()
+            self._local.c = None            # the next call reconnects
+            raise
 
     @property
     def ttl(self) -> int:
@@ -56,7 +75,6 @@ class PgJobStore:
     def create(self, correlation_id: str, owner: str = "") -> Job:
         job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
         with self._conn() as c:
-            self._purge(c)
             c.execute("INSERT INTO jobs (id, correlation_id, owner, status, created_at, created_ts) VALUES (%s,%s,%s,%s,%s,%s)",
                       (job.id, correlation_id, owner, "preparing", job.created_at, time.time()))
         return job
@@ -65,10 +83,10 @@ class PgJobStore:
         """Count pending jobs and insert in one transaction under an advisory lock, so API nodes cannot overrun the cap."""
         job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
         with self._conn() as c:
-            self._purge(c)
             with c.transaction():
                 c.execute("SELECT pg_advisory_xact_lock(7406001)")
-                n = c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('preparing','queued','processing')").fetchone()[0]
+                n = c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('preparing','queued','processing') AND created_ts >= %s",
+                              (time.time() - self.ttl,)).fetchone()[0]
                 if n >= limit:
                     return None
                 c.execute("INSERT INTO jobs (id, correlation_id, owner, status, created_at, created_ts) VALUES (%s,%s,%s,%s,%s,%s)",
@@ -86,10 +104,11 @@ class PgJobStore:
                       (images, hint, Jsonb(applicant), job_id))
 
     def get(self, job_id: str) -> Job | None:
+        # An expired job is never returned; the rows themselves are deleted by sweep() (housekeeping thread and workers), not on
+        # every read: a DELETE per status poll was most of the database load.
         with self._conn() as c:
-            self._purge(c)
             row = c.execute("SELECT id, correlation_id, owner, status, created_at, result, error, consent_training "
-                            "FROM jobs WHERE id=%s", (job_id,)).fetchone()
+                            "FROM jobs WHERE id=%s AND created_ts >= %s", (job_id, time.time() - self.ttl)).fetchone()
         if not row:
             return None
         status = "queued" if row[3] == "preparing" else row[3]
@@ -115,6 +134,10 @@ class PgJobStore:
     def pending_count(self) -> int:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('preparing','queued','processing')").fetchone()[0]
+
+    def ping(self) -> None:
+        with self._conn() as c:
+            c.execute("SELECT 1")
 
     def count(self) -> int:
         with self._conn() as c:
