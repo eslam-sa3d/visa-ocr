@@ -4,6 +4,7 @@ It gives a recognition score per line, which Tesseract does not. It is used by t
 reading with Tesseract's. Optional: without the package the ensemble simply uses Tesseract alone."""
 from __future__ import annotations
 
+import difflib
 import io
 import os
 import re
@@ -51,7 +52,24 @@ class RapidOcrEngine:
         result, _ = reader(np.array(image))
         texts = [normalise(r[1]) for r in (result or [])]
         scores = [float(r[2]) for r in (result or [])]
+        self._last_polys = [r[0] for r in (result or [])]
         return texts, scores
+
+    def _line_boxes(self, lines: list[str], texts: list[str], index: int, scale: float, y_off: int) -> list[dict] | None:
+        """Where each MRZ line sits on the uploaded image, in its own pixels (x1, y1, x2, y2). A reviewer's correction is saved
+        with this box so the line can be cut out for training. None when a line cannot be matched to one detected box."""
+        boxes, used = [], set()
+        for line in lines:
+            ranked = sorted(((difflib.SequenceMatcher(None, line, t).ratio(), i) for i, t in enumerate(texts) if i not in used),
+                            reverse=True)
+            if not ranked or ranked[0][0] < 0.75:
+                return None
+            i = ranked[0][1]
+            used.add(i)
+            xs = [float(p[0]) / scale for p in self._last_polys[i]]
+            ys = [float(p[1]) / scale + y_off for p in self._last_polys[i]]
+            boxes.append({"image": index, "box": [int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1]})
+        return boxes
 
     def extract(self, images: list[bytes], doc_type_hint: str | None) -> EngineOutput:
         try:
@@ -63,9 +81,9 @@ class RapidOcrEngine:
         budget = float(os.environ.get("OCR_SECOND_READER_SECONDS", "1.5"))
         deadline = app_config.ocr_deadline()
         hard = budget * 3
-        best, best_conf, best_score = None, None, -2
+        best, best_conf, best_score, best_fields = None, None, -2, {}
         with self._lock:
-            for raw in images:
+            for index, raw in enumerate(images):
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
                 # The estimated tilt is tried first. Each view is read at its own size first (fast), and enlarged only if
                 # that reading is not perfect: enlarging a page that is already big enough only makes detection slower.
@@ -80,7 +98,9 @@ class RapidOcrEngine:
                         break                              # a reading is in hand: do not spend longer looking for a better one
                     view = img if angle == 0 else img.rotate(angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
                     for frac, enlarge in ((1.0, False), (1.0, True), (0.45, True)):
-                        part = view.crop((0, int(view.height * (1 - frac)), view.width, view.height))
+                        y_off = int(view.height * (1 - frac))
+                        part = view.crop((0, y_off, view.width, view.height))
+                        native_width = part.width
                         size = upscaled_size(part.width, part.height, 1800 if enlarge else 1000)
                         if size and size[0] > part.width:
                             part = part.resize(size, Image.LANCZOS)
@@ -108,6 +128,9 @@ class RapidOcrEngine:
                         if score > best_score:
                             best, best_score = lines, score
                             best_conf = round(min(used), 4) if used else None
+                            # boxes are only exact on the unrotated page
+                            boxes = self._line_boxes(lines, texts, index, part.width / native_width, y_off) if angle == 0 else None
+                            best_fields = {"mrzLineBoxes": boxes} if boxes else {}
                         if perfect:
-                            return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf)
-        return EngineOutput(engine=self.name, mrz_lines=best, mrz_confidence=best_conf)
+                            return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf, fields=best_fields)
+        return EngineOutput(engine=self.name, mrz_lines=best, mrz_confidence=best_conf, fields=best_fields)

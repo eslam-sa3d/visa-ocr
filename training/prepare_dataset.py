@@ -24,7 +24,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.textutil import script_of  # noqa: E402
@@ -55,7 +55,8 @@ def from_store(store_dir: Path, out: Path) -> list[dict]:
             src = images.get(line["image"])
             if src is None:
                 continue
-            with Image.open(src) as im:
+            with Image.open(src) as raw:
+                im = ImageOps.exif_transpose(raw)          # boxes are in the upright image, as the readers saw it
                 x1, y1, x2, y2 = line["box"]
                 x1, y1 = max(0, min(x1, x2)), max(0, min(y1, y2))
                 x2, y2 = min(im.width, max(x1, x2)), min(im.height, max(y1, y2))

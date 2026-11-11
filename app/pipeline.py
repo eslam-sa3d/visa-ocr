@@ -121,6 +121,11 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         result = analyse_mrz(output.mrz_lines)
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant)
         result["engine"], result["fields"] = output.engine, _fields_out(output)
+        boxes = result["fields"].get("mrzLineBoxes")
+        if boxes and len(boxes) == len(output.mrz_lines):            # the text as read, for the reviewer to correct
+            result["fields"]["mrzLineBoxes"] = [{**b, "text": t} for b, t in zip(boxes, output.mrz_lines)]
+        else:
+            result["fields"].pop("mrzLineBoxes", None)
         return "done", result
     except EngineUnavailable as exc:
         return "failed", {"code": "engine_unavailable", "message": str(exc)}

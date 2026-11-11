@@ -54,6 +54,7 @@ class PaddleOcrEngine:
         self.registry = registry or Registry()
         self.langs = langs or [l.strip() for l in os.environ.get("OCR_LANGS", "en,ar").split(",") if l.strip()]
         self._readers: dict[str, object] = {}
+        self._stamp: tuple = self._manifest_stamp()
         self._used_models: dict[str, dict] = {}
         self._init_lock = threading.Lock()                     # one model load at a time
         self._infer = threading.Semaphore(config.ocr_concurrency())  # Paddle predictors are not re-entrant
@@ -75,7 +76,21 @@ class PaddleOcrEngine:
             raise EngineUnavailable(f"Model {m.id} is {status}")
         return m
 
+    def _manifest_stamp(self) -> tuple:
+        try:
+            st = self.registry.manifest_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return ()
+
     def _reader(self, lang: str):
+        # A model switch (register_model.py --activate, or automatic retraining) rewrites the manifest. Notice that and load
+        # the newly active models on the next read, so the workers do not need a restart.
+        stamp = self._manifest_stamp()
+        if stamp != self._stamp:
+            with self._init_lock:
+                if stamp != self._stamp:
+                    self._readers, self._used_models, self._stamp = {}, {}, stamp
         if lang in self._readers:
             return self._readers[lang]
         with self._init_lock:

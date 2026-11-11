@@ -1,0 +1,17 @@
+# Automatic retraining, one run. Started by visa-ocr-autotrain.timer. Install with deploy/install_autotrain.sh.
+[Unit]
+Description=visa-ocr automatic retraining
+After=network.target
+
+[Service]
+Type=oneshot
+User=visaocr
+WorkingDirectory=/opt/visa-ocr
+EnvironmentFile=/etc/visa-ocr/autotrain.env
+# shellcheck disable=SC2086 - AUTOTRAIN_ARGS is split on purpose
+ExecStart=/bin/sh -c 'exec ${PYTHON:-/opt/visa-ocr/.venv/bin/python} training/auto_train.py --store-dir "$TRAINING_STORE_DIR" --work-dir "$AUTOTRAIN_WORK_DIR" --lang "$AUTOTRAIN_LANG" --arch "$AUTOTRAIN_ARCH" --models-dir "$MODELS_DIR" $AUTOTRAIN_ARGS'
+Nice=10
+# keep the run inside its own folders
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true

@@ -43,3 +43,10 @@ raised `MAX_PENDING_JOBS`. Pin cores with `docker run --cpuset-cpus`. GPU count 
 | Automatic retraining (`training/auto_train.py`): built and tested with the training step replaced; first real run on a GPU server still to do | Engineering + infra | GPU server, pretrained weights, 500+ corrected lines |
 | US driving licences, old non-standard EU cards | Business owner | Decide if in scope |
 | Sign-off of thresholds (E2) | Business owner | `docs/ACCEPTANCE_SIGNOFF.md` |
+
+## 4. Docker image size
+
+`docker build --build-arg VARIANT=lite -t visa-ocr:lite .` builds without PaddleOCR (Tesseract + RapidOCR only, the
+pair all the figures on this page were measured with). Estimated about 0.5 to 0.7 GB instead of roughly 2 GB or more
+for the full image; neither size has been measured, because no Docker daemon was available here. The lite image
+cannot use fine-tuned PaddleOCR models, so automatic retraining has no effect on it.

@@ -293,3 +293,62 @@ def test_activation_refused_when_current_model_has_no_metrics(tmp_path):
     with pytest.raises(SystemExit, match="no recorded CER"):
         register(reg, new, activate=True, force=False)
     assert next(m for m in Registry(tmp_path).models() if m.id == "old").active           # still the live model
+
+
+def test_paddle_engine_picks_up_a_model_switch_without_restart(tmp_path, monkeypatch):
+    fake = types.ModuleType("paddleocr")
+    fake.PaddleOCR = FakePaddleOCR
+    monkeypatch.setitem(sys.modules, "paddleocr", fake)
+    reg = registry_with_models(tmp_path)
+    engine = PaddleOcrEngine(registry=reg, langs=["en", "ar"])
+    assert engine.extract([png_bytes()], "passport").fields["models"]["ar"]["id"] == "rec_ar"
+    # a new Arabic model is activated while the engine is running
+    (reg.base / "rec_ar2").mkdir()
+    (reg.base / "rec_ar2" / "w.bin").write_bytes(b"new")
+    models = reg.models()
+    for m in models:
+        if m.id == "rec_ar":
+            m.active = False
+    reg.save(models + [ModelInfo(id="rec_ar2", task="text_recognition", lang="ar", version="t2", path="rec_ar2", active=True)])
+    out = engine.extract([png_bytes()], "passport")
+    assert out.fields["models"]["ar"]["id"] == "rec_ar2"
+
+
+def test_ui_flow_consent_then_correction_becomes_a_training_crop(tmp_path, monkeypatch):
+    """What the page does: upload with consent, read the line positions from the result, post them back corrected.
+    The saved correction must then yield line crops for training."""
+    import io as _io
+    import random
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
+    import accuracy_matrix as A
+    import make_scenarios as M
+    import prepare_dataset
+    from app.engines.rapid_ocr import RapidOcrEngine
+    try:
+        RapidOcrEngine()._load()
+    except Exception:
+        import pytest
+        pytest.skip("RapidOCR not installed")
+    monkeypatch.setenv("OCR_ENGINE", "ensemble")
+    monkeypatch.setenv("TRAINING_STORE_DIR", str(tmp_path / "store"))
+    monkeypatch.setattr(main, "training", main.training.__class__(tmp_path / "store"))
+    lines, _ = A.build("TD3", **A.rnd_case(random.Random(51), "TD3"))
+    buf = _io.BytesIO()
+    M.draw_document({"lines": lines, "label": "x"}).convert("RGB").save(buf, "PNG")
+    client = TestClient(main.app)
+    r = client.post("/v1/documents/extract", files=[("files", ("p.png", buf.getvalue(), "image/png"))],
+                    data={"consent_training": "true"})
+    assert r.status_code == 202
+    job = client.get("/v1/jobs/" + r.json()["jobId"]).json()
+    boxes = job["result"]["fields"]["mrzLineBoxes"]
+    assert [b["text"] for b in boxes] == lines
+    body = {"reviewer": "tester", "document": {}, "lines": [{"image": b["image"], "box": b["box"], "text": b["text"], "lang": "en"} for b in boxes]}
+    assert client.post(f"/v1/jobs/{r.json()['jobId']}/corrections", json=body).json() == {"stored": True, "lines": 2}
+    out = tmp_path / "ds"
+    (out / "images").mkdir(parents=True)
+    samples = prepare_dataset.from_store(tmp_path / "store", out)
+    assert [s["text"] for s in samples] == lines
+    from PIL import Image
+    crop = Image.open(out / samples[0]["path"])
+    assert crop.width > 600 and 15 < crop.height < 60            # one MRZ line, not the whole page
