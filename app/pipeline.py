@@ -2,10 +2,13 @@
 review policy. Returns ("done", result) or ("failed", error). No web framework code in here."""
 from __future__ import annotations
 
+import os
+
 import logging
 
 
 from . import config
+from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
 from .mrz import MrzError, parse_mrz
@@ -89,6 +92,7 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
 
 def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
     try:
+        images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
         output = engine.extract(images, hint)
         mrz_confidence = output.mrz_confidence
         text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
@@ -122,7 +126,8 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant)
         result["engine"], result["fields"] = output.engine, _fields_out(output)
         boxes = result["fields"].get("mrzLineBoxes")
-        if boxes and len(boxes) == len(output.mrz_lines):            # the text as read, for the reviewer to correct
+        wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data
+        if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
             result["fields"]["mrzLineBoxes"] = [{**b, "text": t} for b, t in zip(boxes, output.mrz_lines)]
         else:
             result["fields"].pop("mrzLineBoxes", None)

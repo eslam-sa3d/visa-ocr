@@ -55,3 +55,29 @@ def upscaled_size(width: int, height: int, target_width: int) -> tuple[int, int]
         return None
     new_h = max(1, int(height * target_width / width))
     return (target_width, new_h) if target_width * new_h <= config.max_pixels() else None
+
+
+def shrink_for_ocr(data: bytes) -> bytes:
+    """Bring a large photo down to the working size (WORK_MAX_SIDE, longest side in pixels). A 12-megapixel phone photo takes
+    several times longer to read and several times the memory, for no gain: the readers work at about 1600 to 2400 pixels.
+    The page is turned upright first (EXIF), so everything downstream sees one consistent image. Small images are returned
+    unchanged, byte for byte. A decoding problem also returns the original, so the normal error handling deals with it."""
+    limit = config.work_max_side()
+    if limit <= 0:
+        return data
+    try:
+        from PIL import Image, ImageOps  # noqa: WPS433
+        with Image.open(io.BytesIO(data)) as img:
+            if max(img.size) <= limit:
+                return data
+            if img.format == "JPEG":
+                img.draft("RGB", (limit, limit))            # decode at a reduced scale: several times faster
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            ratio = limit / max(img.size)
+            if ratio < 1:
+                img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))), Image.LANCZOS)
+            out = io.BytesIO()
+            img.save(out, "JPEG", quality=92)
+            return out.getvalue()
+    except Exception:  # noqa: BLE001
+        return data

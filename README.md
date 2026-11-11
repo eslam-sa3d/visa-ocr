@@ -1,54 +1,57 @@
 # Visa Portal offline document OCR
 
-First implementation slice of the offline OCR plan: web-only, server-side, no internet access at runtime.
+Reads passports, visa stickers, ID cards, the Saudi Iqama and GCC ID cards (English and Arabic) from a photo, and returns
+the fields, the check results and whether a person must review them. Runs on your own servers with no internet access.
 
-## What exists
+**Status (11 Nov 2026): supervised pilot.** Accuracy has been measured on generated documents only. See
+`docs/GO_LIVE_PLAN.md` for what is still needed before automatic decisions.
 
-- `app/mrz.py`: ICAO 9303 parser for TD1, TD2, TD3 (passports, all countries), MRV-A and MRV-B (Schengen visa stickers). Check digits, composite check, century logic for dates, OCR look-alike correction in numeric positions, long document numbers on TD1.
-- `app/validation.py`: validation flags (`mrz_checksum_failed`, `document_expired`, `ocr_digits_corrected`, ...) and `cross_match` for passport vs visa identity checks.
-- `app/engines/`: engine interface plus a Tesseract MRZ baseline. Vendor engines (for example Regula on-prem) and PaddleOCR plug in here after the POC.
-- `app/main.py`: FastAPI service with correlation IDs, upload limits, jobs, and no image logging or storage.
-- `tests/`: ICAO specimen documents for every format, tamper and OCR-error cases, API tests.
-- `samples/` and `docs/API_EXAMPLES.md`: synthetic sample documents (passports from several countries, Schengen visas, TD1 cards) and real request/response examples. Regenerate with `python tools/make_samples.py`.
-
-## Run
+## Quick start
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
-uvicorn app.main:app --port 8080
+pytest                                                   # 190 pass, 6 skipped
+OCR_ENGINE=ensemble uvicorn app.main:app --port 8080     # then open http://127.0.0.1:8080/ui
 ```
 
-Try the parser without any OCR:
+Docker: `docker build --build-arg VARIANT=lite -t visa-ocr:lite .` (small, no PaddleOCR) or `docker build -t visa-ocr .`
+(full). Setup, running and use are in `docs/USER_MANUAL.md`.
 
-```bash
-curl -s localhost:8080/v1/mrz/parse -H 'content-type: application/json' \
-  -d '{"lines":["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<","L898902C36UTO7408122F1204159ZE184226B<<<<<10"]}'
-```
+## Documents
 
-## API
+| Document | Read it for |
+|---|---|
+| `docs/USER_MANUAL.md` | Set up, run, use the page and the API, settings, troubleshooting |
+| `docs/ARCHITECTURE.md` | Components, how one read works, data and privacy, limits |
+| `docs/SERVER_SIZING.md` | Servers, cores, memory and storage for 2,000 concurrent users |
+| `docs/GO_LIVE_PLAN.md` | Measured speed, open items and owners |
+| `docs/ACCEPTANCE_SIGNOFF.md` | Thresholds for the business owner to sign |
+| `docs/MODEL_TRAINING.md` | Fine-tuning and automatic retraining |
+| `docs/RUNBOOK_CONNECTED_MACHINE.md` | Fetching models and training on a connected machine |
+| `docs/OFFLINE_INSTALL.md` | Installing on a server with no internet |
+| `docs/SECURITY.md` | API keys, TLS, limits, data handling |
+| `docs/API_EXAMPLES.md` | Request and response samples |
+| `docs/ACCURACY_REVIEW.md`, `docs/TEST_PLAN.md`, `docs/GCC_ID_COVERAGE.md` | Accuracy work and test coverage |
+
+## What is in the box
+
+- `app/`: the service. `mrz.py` (ICAO 9303: TD1, TD2, TD3, MRV-A, MRV-B), `visual_zone.py` and `gcc_ids.py` (cards
+  without an MRZ), `engines/` (Tesseract, RapidOCR, PaddleOCR and their combinations), `pipeline.py`, `main.py` (API).
+- `training/`: dataset building, fine-tuning, scoring, model registration, `auto_train.py` (scheduled retraining).
+- `deploy/`: systemd timer and installer for retraining.
+- `tools/`: test document generators, accuracy runs, load test, model download.
+- `tests/`: 190 tests, including ICAO specimen documents for every format.
+
+## API in one look
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/mrz/parse` | Parse and validate MRZ lines you already have |
-| `POST /v1/documents/extract` | Upload 1 to 4 JPEG/PNG images, returns a job |
-| `GET /v1/jobs/{id}` | Status, fields, per-check results, flags, `needsReview` |
+| `POST /v1/documents/extract` | Upload 1 to 4 JPEG or PNG images; returns a job id |
+| `GET /v1/jobs/{id}` | Status, fields, checks, flags, `needsReview` |
+| `POST /v1/mrz/parse` | Check MRZ text you already have |
+| `POST /v1/jobs/{id}/corrections` | Reviewer corrections (with applicant consent) |
+| `GET /v1/models`, `/healthz`, `/readyz` | Model status and health |
 
-## Not built yet (next slices)
+## Not supported
 
-1. Engine POC harness and scorecard (Regula on-prem vs PaddleOCR baseline) on the sample set.
-2. Visual-zone extraction for priority passport countries, Schengen visa fields, GCC IDs, US green card front and barcode.
-3. Document classifier and image quality scoring (glare, blur, skew).
-4. Persistent jobs (PostgreSQL), queue workers, encrypted storage with auto-purge, audit log.
-5. Review queue UI and the web capture component.
-6. Egress-denied network policy and an air-gapped test run.
-
-## Offline notes
-
-- Build the image on a connected host, push to the internal registry, run air-gapped. Bundle models and fonts locally.
-- Tesseract's default model is a weak fit for the OCR-B MRZ font; install `ocrb.traineddata` and set `TESSERACT_LANG=ocrb`.
-- The in-memory job store is for development only.
-
-## English / Arabic AI model (trainable)
-`OCR_ENGINE=paddle-ocr` enables a PaddleOCR-based engine for English and Arabic lines. Models live in `models/`
-and are checksum-verified; see `docs/MODEL_TRAINING.md` for the training workflow, and `GET /v1/models` for status.
+US driving licences and state IDs, old non-standard EU cards, PDF and HEIC uploads.
