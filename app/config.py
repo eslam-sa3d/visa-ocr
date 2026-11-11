@@ -50,6 +50,7 @@ def job_stale_seconds() -> int: return max(30, _int("JOB_STALE_SECONDS", 300))  
 def job_max_attempts() -> int: return max(1, _int("JOB_MAX_ATTEMPTS", 3))
 def db_statement_timeout_ms() -> int: return max(1000, _int("DB_STATEMENT_TIMEOUT_MS", 15000))
 def worker_poll_seconds() -> float: return min(5.0, max(0.05, _float("WORKER_POLL_SECONDS", 0.2)))   # idle wait between queue checks
+def optional_data_review() -> bool: return _flag("OPTIONAL_DATA_REVIEW")   # force review when only optional data is unconfirmed
 def job_threads() -> int:                                                   # in-process OCR jobs at a time (no PostgreSQL queue)
     return max(1, _int("JOB_THREADS", max(1, (os.cpu_count() or 2) // 2)))
 def text_read_seconds() -> float: return max(1.0, _float("OCR_TEXT_SECONDS", 20.0))   # ID-card text reader budget with no deadline
