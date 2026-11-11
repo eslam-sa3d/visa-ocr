@@ -12,12 +12,12 @@ import threading
 import time
 
 from .. import config as app_config
-from ..mrz import MrzError, find_mrz_lines, lines_confidence, parse_mrz
+from ..mrz import MrzError, find_mrz_lines, lines_confidence, lone_passport_line2, parse_mrz
 from ..uploads import upscaled_size
 from .base import EngineOutput, EngineUnavailable
 from .tesseract_mrz import _estimate_tilt
 
-_FILLER_LIKE = str.maketrans({">": "<", "«": "<", "‹": "<", "＜": "<", "《": "<", " ": "", "\t": ""})
+_FILLER_LIKE = str.maketrans({">": "<", "«": "<", "‹": "<", "＜": "<", "《": "<", "〈": "<", "人": "<", "く": "<", " ": "", "\t": ""})   # 人 and く: how this model reads a filler on small print
 
 
 def normalise(text: str) -> str:
@@ -82,6 +82,7 @@ class RapidOcrEngine:
         deadline = app_config.ocr_deadline()
         hard = budget * 3
         best, best_conf, best_score, best_fields = None, None, -2, {}
+        lone = None        # a passport line 2 read on its own, when no complete MRZ was found
         with self._lock:
             for index, raw in enumerate(images):
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
@@ -132,6 +133,7 @@ class RapidOcrEngine:
                         last_cost, last_area = time.monotonic() - t0, part.width * part.height
                         lines = find_mrz_lines(texts)
                         if not lines:
+                            lone = lone or lone_passport_line2(texts)
                             continue
                         score, perfect = self._score(lines)
                         if score > best_score:
@@ -144,4 +146,6 @@ class RapidOcrEngine:
                             return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=best_conf, fields=best_fields)
                     if deadline and not ran:
                         out_of_time = True                 # nothing fits any more: stop trying other angles
+        if best is None and lone:
+            best_fields = {"mrzLine2": lone}
         return EngineOutput(engine=self.name, mrz_lines=best, mrz_confidence=best_conf, fields=best_fields)

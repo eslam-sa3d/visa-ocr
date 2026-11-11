@@ -39,6 +39,21 @@ def _fallback_mrz(images: list[bytes], hint: str | None) -> list[str] | None:
         return None
 
 
+def _small_image_note(images: list[bytes]) -> str | None:
+    """Advice for the reviewer when a page is too small for its print to be read reliably."""
+    import io
+    from PIL import Image
+    for raw in images:
+        try:
+            w, h = Image.open(io.BytesIO(raw)).size
+        except Exception:  # noqa: BLE001
+            continue
+        if max(w, h) < 1300:
+            return (f"The image is small ({w} x {h} pixels), so the MRZ letters are only a few pixels high and are easily misread. "
+                    "Scan at 200 dpi or more, or photograph only the data page so it fills the frame.")
+    return None
+
+
 def _fields_out(output: EngineOutput) -> dict:
     fields = dict(output.fields or {})
     if not config.include_text_lines():
@@ -147,7 +162,8 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             return "failed", {"code": "mrz_not_found", "message": _no_document_message(hint, bool(text_lines))}
 
         result = analyse_mrz(output.mrz_lines)
-        apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines)
+        apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines,
+                         line2_agreed=bool((output.fields or {}).get("line2Agreed")))
         result["engine"], result["fields"] = output.engine, _fields_out(output)
         if (output.fields or {}).get("readers"):
             result["readers"] = output.fields["readers"]
@@ -163,6 +179,12 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
                                                "the optional data without checking it."})
             if strict:
                 result["needsReview"] = True
+        result["fields"].pop("mrzLine2", None)
+        result["fields"].pop("line2Agreed", None)
+        if result.get("needsReview"):
+            small = _small_image_note(images)
+            if small:
+                result["flags"].append({"code": "image_low_resolution", "severity": "warning", "message": small})
         boxes = result["fields"].get("mrzLineBoxes")
         wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data
         if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
