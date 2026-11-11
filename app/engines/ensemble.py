@@ -35,6 +35,22 @@ def _score(lines):
     return sum(checks.values()), all(checks.values())
 
 
+def _differences(a: list[str] | None, b: list[str] | None) -> list[dict]:
+    """Where two MRZ readings differ: line, position, and the character each reader saw (first 12 only)."""
+    out: list[dict] = []
+    if not a or not b:
+        return out
+    if len(a) != len(b):
+        return [{"lines": [len(a), len(b)]}]
+    for n, (la, lb) in enumerate(zip(a, b), 1):
+        if len(la) != len(lb):
+            out.append({"line": n, "length": [len(la), len(lb)]})
+        for i, (x, y) in enumerate(zip(la, lb), 1):
+            if x != y and len(out) < 12:
+                out.append({"line": n, "position": i, "tesseract": x, "rapidocr": y})
+    return out
+
+
 class EnsembleEngine:
     @staticmethod
     def _text_fields(images, started: float | None = None) -> dict:
@@ -63,9 +79,18 @@ class EnsembleEngine:
                 return EngineOutput(engine=self.name, mrz_lines=None, fields=fields)
         # The two readers run side by side: Tesseract is a separate process and RapidOCR releases the interpreter lock, so on two
         # or more cores the wait is the slower of the two, not the sum.
+        took: dict[str, float] = {}
+
+        def timed(name, engine):
+            t0 = time.monotonic()
+            try:
+                return engine.extract(images, doc_type_hint)
+            finally:
+                took[name] = round(time.monotonic() - t0, 2)
+
         with ThreadPoolExecutor(max_workers=2) as pool:
-            ft = pool.submit(self.tesseract.extract, images, doc_type_hint)
-            fr = pool.submit(self.rapid.extract, images, doc_type_hint)
+            ft = pool.submit(timed, "tesseract", self.tesseract)
+            fr = pool.submit(timed, "rapidocr", self.rapid)
             t = ft.result()
             try:
                 r = fr.result()
@@ -75,13 +100,17 @@ class EnsembleEngine:
             if not t.mrz_lines:
                 t.fields = self._text_fields(images, started)
             return t
+        # Why a result was or was not confirmed, for the reviewer and for support: which reader found the MRZ, how long each
+        # took, and where the two readings differ.
+        readers = {"tesseract": bool(t.mrz_lines), "rapidocr": bool(r.mrz_lines), "seconds": took,
+                   "agree": bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines, "differences": _differences(t.mrz_lines, r.mrz_lines)}
         if t.mrz_lines and r.mrz_lines and t.mrz_lines == r.mrz_lines:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None
-            return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields=r.fields)
+            return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields={**r.fields, "readers": readers})
         candidates = [x for x in (t, r) if x.mrz_lines]
         if not candidates:
             return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images, started))
         best = max(candidates, key=lambda x: _score(x.mrz_lines)[0])      # ties keep Tesseract (listed first)
         return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None,
-                            fields=r.fields if r.mrz_lines else {})   # line positions, for reviewer corrections
+                            fields={**(r.fields if r.mrz_lines else {}), "readers": readers})   # line positions, for corrections
