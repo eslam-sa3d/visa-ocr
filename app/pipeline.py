@@ -149,6 +149,9 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         result = analyse_mrz(output.mrz_lines)
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines)
         result["engine"], result["fields"] = output.engine, _fields_out(output)
+        if (output.fields or {}).get("readers"):
+            result["readers"] = output.fields["readers"]
+        result["fields"].pop("readers", None)
         boxes = result["fields"].get("mrzLineBoxes")
         wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data
         if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
