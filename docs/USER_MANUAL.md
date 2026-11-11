@@ -67,6 +67,8 @@ docker run -d --name visa-ocr -p 443:443 \
 - **API key.** The container refuses to start without `API_KEYS`. For a local test only, use `-e ALLOW_ANONYMOUS=1`.
 - **Check it.** `curl -k https://localhost/readyz` should answer `{"status":"ready",...}`.
 
+On a Mac, double-click `run_local.command`: it starts the service on port 8080 and opens the test page.
+
 Without Docker: `OCR_ENGINE=ensemble .venv/bin/python -m uvicorn app.main:app --port 8080`, then open
 `http://127.0.0.1:8080/ui`. The service does not reload code by itself: restart it after an update.
 
