@@ -106,6 +106,26 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
     return flags, verified
 
 
+def _page_values(text_lines: list[dict]) -> dict:
+    """Stand-alone values printed on the page: upper-case tokens, and the sex letters found on their own or after a slash."""
+    tokens: set[str] = set()
+    sexes: set[str] = set()
+    for ln in text_lines:
+        text = str(ln.get("text", "")).upper()
+        if "<" in text:
+            continue
+        tokens.update(t for t in re.split(r"[^A-Z0-9]+", text) if t)
+        m = re.fullmatch(r"(?:.*[/\s])?([MF])", text.strip())
+        if m:
+            sexes.add(m[1])
+    return {"tokens": tokens, "sex": sexes}
+
+
+def number_on_page(number: str | None, tokens: set[str]) -> bool:
+    n = re.sub(r"[^A-Z0-9]", "", (number or "").upper())
+    return len(n) >= 6 and n in tokens
+
+
 def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: list[dict] | None,
                      applicant: Applicant, mrz_lines: list[str] | None = None, agreed: list[str] | None = None) -> None:
     """Add review flags to a parsed MRZ result (mutates it)."""
@@ -120,7 +140,9 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     v_status, printed = visual_name_status(doc.get("surname", ""), doc.get("givenNames", ""), text_lines or [],
                                            name_field_full=bool(name_line) and not name_line.endswith("<"))
     if v_status == "mismatch":
-        flags.append(Flag("name_differs_from_visual_zone", "error",
+        # When two independent readers read the same MRZ name, a near miss on the printed page is more likely a misread of the
+        # page (small or decorative print) than of the MRZ: it is reported, and does not force a review.
+        flags.append(Flag("name_differs_from_visual_zone", "warning" if "names" in set(agreed or []) else "error",
                           f"MRZ name '{doc.get('surname', '')} {doc.get('givenNames', '')}' differs from the name printed on "
                           f"the page ('{printed}'). One of them was probably misread. Check the document."))
 
@@ -128,27 +150,49 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     confident = mrz_confidence is not None and mrz_confidence >= thr
     status: dict[str, str] = {}
 
-    def decide(name: str, by_form: bool, by_page: bool = False) -> bool:
+    # Evidence for a field no check digit covers, strongest first.
+    readers = set(agreed or [])     # two independent readers gave the same value, in readings that both pass every check digit
+    page = _page_values(text_lines or [])
+    on_page: set[str] = set()       # the printed part of the page holds the same value: a second copy in another typeface
+    if v_status == "match":
+        on_page.add("names")
+    if doc.get("issuingState") and doc["issuingState"] in page["tokens"]:
+        on_page.add("issuingState")
+    if doc.get("nationality") and doc["nationality"] in page["tokens"]:
+        on_page.add("nationality")
+    sex = (doc.get("sex") or "").upper()
+    if sex in ("M", "F") and page["sex"] == {sex}:
+        on_page.add("sex")
+    if number_on_page(doc.get("documentNumber"), page["tokens"]):
+        on_page.add("documentNumber")
+    by_format: set[str] = set()
+    # Passports and ID cards carry a whole-line check digit that visas do not have: when it passes, the line is not a visa line.
+    checks = doc.get("checks") or {}
+    # Taken only together with other evidence, so a single unconfirmed reading is never accepted on this alone.
+    if doc.get("format") in ("TD1", "TD2", "TD3") and checks and all(checks.values()) and (readers or on_page):
+        by_format.add("documentType")
+
+    def decide(name: str, by_form: bool) -> bool:
         if by_form:
             status[name] = "confirmed by form"
-        elif by_page:
+        elif name in readers:
+            status[name] = "both readers agree"
+        elif name in on_page:
             status[name] = "confirmed by printed page"
+        elif name in by_format:
+            status[name] = "fixed by the document format"
         elif confident:
             status[name] = "ocr confident"
         else:
             status[name] = "unverified"
         return status[name] != "unverified"
 
-    # agreed: fields two independent readers read identically, in readings that both pass every check digit.
-    agreed = set(agreed or [])
-    names_ok = decide("names", verified["names"], v_status == "match" or "names" in agreed)
-    nat_ok = decide("nationality", verified["nationality"], "nationality" in agreed)
-    sex_ok = decide("sex", False, "sex" in agreed)
-    iss_ok = decide("issuingState", False, "issuingState" in agreed)
-    type_ok = decide("documentType", False, "documentType" in agreed)
-    for k in agreed:
-        if status.get(k) == "confirmed by printed page" and not (k == "names" and v_status == "match"):
-            status[k] = "both readers agree"
+    names_ok = decide("names", verified["names"])
+    nat_ok = decide("nationality", verified["nationality"])
+    sex_ok = decide("sex", False)
+    iss_ok = decide("issuingState", False)
+    type_ok = decide("documentType", False)
+    agreed = readers | on_page      # used below for the document number
     opt_ok = True
     if doc.get("format") in ("MRVA", "MRVB") and doc.get("optionalData"):
         opt_ok = decide("visaOptionalData", False)       # visa optional data has no check digit
