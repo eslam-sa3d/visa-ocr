@@ -8,6 +8,7 @@ Agreement is only trusted when every check digit passes: two engines can share a
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from ..mrz import MrzError, parse_mrz
 from .base import EngineOutput, EngineUnavailable
@@ -52,10 +53,17 @@ class EnsembleEngine:
             fields = self._text_fields(images)
             if fields:
                 return EngineOutput(engine=self.name, mrz_lines=None, fields=fields)
-        t = self.tesseract.extract(images, doc_type_hint)
-        try:
-            r = self.rapid.extract(images, doc_type_hint)
-        except EngineUnavailable:
+        # The two readers run side by side: Tesseract is a separate process and RapidOCR releases the interpreter lock, so on two
+        # or more cores the wait is the slower of the two, not the sum.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ft = pool.submit(self.tesseract.extract, images, doc_type_hint)
+            fr = pool.submit(self.rapid.extract, images, doc_type_hint)
+            t = ft.result()
+            try:
+                r = fr.result()
+            except EngineUnavailable:
+                r = None
+        if r is None:
             if not t.mrz_lines:
                 t.fields = self._text_fields(images)
             return t

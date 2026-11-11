@@ -91,10 +91,14 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
     try:
         output = engine.extract(images, hint)
         mrz_confidence = output.mrz_confidence
-        if not output.mrz_lines and output.engine != "tesseract-mrz":
+        text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
+        # The MRZ-only search is slow (several seconds when nothing is there). Skip it when the caller said the card has no MRZ and
+        # the card text was read, and when the engine already ran that same search itself.
+        card_hint = hint in ("iqama", "gcc_id") and bool(text_lines)
+        already_searched = output.engine == "ensemble" and not (hint in ("iqama", "gcc_id"))
+        if not output.mrz_lines and output.engine != "tesseract-mrz" and not card_hint and not already_searched:
             output.mrz_lines = _fallback_mrz(images, hint)
             mrz_confidence = None                      # the fallback reports no scores
-        text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
 
         if not output.mrz_lines and text_lines:
             result = parse_gcc_id(text_lines)
@@ -108,6 +112,9 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
                 result["needsReview"] = any(f["severity"] == "error" for f in result["flags"])
                 result["engine"], result["fields"] = output.engine, _fields_out(output)
                 return "done", result
+        if not output.mrz_lines and card_hint:
+            output.mrz_lines = _fallback_mrz(images, hint)      # told "card", but no card fields were read: look for an MRZ after all
+            mrz_confidence = None
         if not output.mrz_lines:
             return "failed", {"code": "mrz_not_found", "message": _no_document_message(hint, bool(text_lines))}
 

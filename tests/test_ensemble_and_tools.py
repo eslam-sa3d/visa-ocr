@@ -123,3 +123,23 @@ def test_low_paddle_confidence_is_raised_only_when_the_second_pair_agrees(monkey
     reg["paddle-ocr"] = Fake(EngineOutput(engine="paddle-ocr", mrz_lines=GOOD, mrz_confidence=0.63))
     reg["ensemble"] = Fake(EngineOutput(engine="ensemble", mrz_lines=BAD, mrz_confidence=None))
     assert engines.AutoEngine().extract([b"x"], None).mrz_confidence == 0.63
+
+
+def test_tilt_estimate_finds_a_rotated_page():
+    from PIL import Image, ImageDraw
+    from app.engines.tesseract_mrz import _estimate_tilt
+    page = Image.new("L", (900, 600), 255)
+    d = ImageDraw.Draw(page)
+    for y in range(60, 560, 40):
+        d.rectangle([60, y, 840, y + 12], fill=0)              # rows of "text"
+    assert _estimate_tilt(page, Image) == 0
+    tilted = page.rotate(-4, Image.BICUBIC, fillcolor=255)
+    assert abs(_estimate_tilt(tilted, Image) - 4) <= 1          # the angle that turns it back level
+
+
+def test_hard_deadline_setting_is_read(monkeypatch):
+    from app import config
+    monkeypatch.setenv("OCR_DEADLINE_SECONDS", "2")
+    assert config.ocr_deadline() == 2.0
+    monkeypatch.setenv("OCR_DEADLINE_SECONDS", "junk")
+    assert config.ocr_deadline() == 0.0

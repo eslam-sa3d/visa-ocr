@@ -48,3 +48,12 @@ def database_url() -> str: return os.environ.get("DATABASE_URL", "")        # po
 def worker_threads() -> int: return max(0, _int("WORKER_THREADS", 1))       # in-process workers when using PostgreSQL (0 = API only)
 def job_stale_seconds() -> int: return _int("JOB_STALE_SECONDS", 300)       # a claimed job older than this is retried
 def job_max_attempts() -> int: return _int("JOB_MAX_ATTEMPTS", 3)
+
+
+def ocr_deadline() -> float:
+    """Hard limit in seconds for one read (0 = off). When set, each reader stops starting new attempts in time to answer by the
+    deadline and returns the best reading it has; a reading that is not perfect then goes to review as usual."""
+    try:
+        return max(0.0, float(os.environ.get("OCR_DEADLINE_SECONDS", "0")))
+    except ValueError:
+        return 0.0
