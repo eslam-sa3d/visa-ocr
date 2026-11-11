@@ -41,3 +41,24 @@ Images are stored only with explicit per-upload consent, with 0700/0600 permissi
 deletes training folders older than `TRAINING_RETENTION_DAYS` (default 30; 0 turns this off) in a background sweep.
 For a consent withdrawal or a cron job use `python tools/purge_training.py --store-dir <dir> --job-id <id>` or `--days N`. Keep the training store off the
 internet-facing host.
+
+## Automatic retraining
+
+`training/auto_train.py` runs the whole cycle on a schedule (cron or a systemd timer on the training server):
+
+```
+0 2 * * 0  cd /opt/visa-ocr && PADDLEOCR_DIR=... BASE_CONFIG=... PRETRAINED=... \
+  python training/auto_train.py --store-dir "$TRAINING_STORE_DIR" --work-dir /data/autotrain \
+  --lang ar --arch arabic_PP-OCRv5_mobile_rec --dict /models/arabic_dict.txt
+```
+
+- It retrains only when at least `--min-new` (500) new corrected lines exist and at least `--min-val` (200) real
+  validation lines are available.
+- It scores the new model and the model in use on the same real validation lines.
+- A new model replaces the current one only if its error rate is lower by `--min-gain`, and only when `--activate`
+  is given. Without `--activate` it is registered as a candidate and `report.json` says how to approve it.
+- A worse model is never activated. Rolling back is `register_model.py --activate` on the older id.
+- The service loads models at start, so restart the workers after a switch.
+
+Tested: the decisions (skip, candidate, activate, refuse) with the training step replaced. Not tested: the real
+fine-tuning step with production weights on a GPU. Start without `--activate` until a few cycles have been checked by hand.
