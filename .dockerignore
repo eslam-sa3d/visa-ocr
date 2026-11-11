@@ -7,3 +7,12 @@ tests
 docs
 *.tgz
 test-images
+.git
+.github
+real-samples
+photos
+training
+tools
+deploy
+.mypy_cache
+.coverage

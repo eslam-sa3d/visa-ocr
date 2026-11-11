@@ -48,6 +48,8 @@ def read_text_lines(images: list[bytes], langs: str | None = None) -> list[dict]
         scaled = base.resize((pw, max(1, round(base.height * pw / base.width))), Image.LANCZOS)
         merged += _fill_row_gaps(merged, scaled, index, pytesseract, "+".join(wanted), to_ascii_digits)
         _reread_id_digits(merged, scaled, pytesseract, to_ascii_digits)
+        for ln in merged:
+            ln["scale"] = round(pw / base.width, 4)      # box pixels per pixel of the uploaded image
         lines.extend(merged)
     return lines
 

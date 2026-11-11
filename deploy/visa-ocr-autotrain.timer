@@ -1,0 +1,10 @@
+# Runs the retraining check every Sunday at 02:00 server time. A missed run (server was off) starts at next boot.
+[Unit]
+Description=Weekly visa-ocr automatic retraining
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

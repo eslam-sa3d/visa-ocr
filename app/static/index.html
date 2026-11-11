@@ -62,6 +62,7 @@
       </select>
       <label for="nat">Declared nationality</label>
       <input id="nat" type="text" maxlength="3" placeholder="e.g. SAU" size="5" style="text-transform:uppercase">
+      <label title="Tick only when the applicant agreed that this image may be used to improve the reader"><input id="consent" type="checkbox"> Applicant consented to training use</label>
       <button id="go" disabled>Read document</button>
       <span id="status" class="muted"></span>
     </div>
@@ -182,12 +183,49 @@ function showAnalysis(res) {
   out.append(d);
 }
 
+// Reviewer corrections: each line the reader located is shown with its text. The reviewer fixes any wrong character and
+// saves; the corrected lines become training data. Shown only when the applicant consented and line positions are known.
+function showCorrections(jobId, res) {
+  const out = $("#out"), f = res.fields || {};
+  const rows = [];
+  (f.mrzLineBoxes || []).forEach((b) => { if (b.text) rows.push({ image: b.image, box: b.box, text: b.text, lang: "en" }); });
+  (f.textLines || []).forEach((l) => {
+    if (!l.box || !l.text) return;
+    const k = l.scale || 1, xs = l.box.map((p) => p[0] / k), ys = l.box.map((p) => p[1] / k);
+    rows.push({ image: l.image || 0, box: [Math.floor(Math.min(...xs)), Math.floor(Math.min(...ys)), Math.ceil(Math.max(...xs)), Math.ceil(Math.max(...ys))],
+                text: l.text, lang: l.script === "arabic" ? "ar" : "en" });
+  });
+  if (!rows.length) return;
+  const box = el("div", { id: "corr" });
+  box.append(el("h2", { style: "margin-top:14px" }, "Corrections for training"),
+             el("p", { className: "muted" }, "Fix any wrong character so each line matches the document exactly, then save. Leave correct lines as they are."));
+  const inputs = rows.map((r) => { const i = el("input", { value: r.text, dir: "auto", style: "width:100%;font-family:monospace;margin:2px 0" }); box.append(i); return i; });
+  const who = el("input", { placeholder: "Your name or staff ID", size: 24 });
+  const save = el("button", { className: "secondary" }, "Save corrections"), note = el("span", { className: "muted" });
+  save.addEventListener("click", async () => {
+    if (!who.value.trim()) { note.textContent = " Enter your name first."; return; }
+    const lines = rows.map((r, i) => ({ image: r.image, box: r.box, text: inputs[i].value.trim(), lang: r.lang })).filter((l) => l.text);
+    save.disabled = true;
+    try {
+      const r = await fetch("/v1/jobs/" + jobId + "/corrections", { method: "POST", headers: hdr({ "Content-Type": "application/json" }),
+                                                                    body: JSON.stringify({ reviewer: who.value.trim(), document: {}, lines }) });
+      const b = await r.json();
+      note.textContent = r.ok ? " Saved " + b.lines + " lines." : " Not saved: " + errText(b);
+      if (!r.ok) save.disabled = false;
+    } catch (e) { note.textContent = " Not saved: " + e.message; save.disabled = false; }
+  });
+  box.append(el("div", { className: "row" }, who, save, note));
+  out.append(box);
+}
+
 $("#go").addEventListener("click", async () => {
   $("#go").disabled = true; $("#status").textContent = "Uploading…";
   try {
     const fd = new FormData(); files.forEach((f) => fd.append("files", f));
     if ($("#hint").value) fd.append("doc_type_hint", $("#hint").value);
     if ($("#nat").value.trim()) fd.append("expected_nationality", $("#nat").value.trim());
+    const consented = $("#consent").checked;
+    if (consented) fd.append("consent_training", "true");
     [["a_surname", "expected_surname"], ["a_given", "expected_given_names"], ["a_docno", "expected_document_number"],
      ["a_birth", "expected_birth_date"], ["a_expiry", "expected_expiry_date"]].forEach(([id, name]) => { if ($("#" + id).value.trim()) fd.append(name, $("#" + id).value.trim()); });
     const r = await fetch("/v1/documents/extract", { method: "POST", body: fd, headers: hdr() });
@@ -197,7 +235,7 @@ $("#go").addEventListener("click", async () => {
     for (let i = 0; i < 60; i++) {
       await new Promise((res) => setTimeout(res, 500));
       const job = await (await fetch("/v1/jobs/" + body.jobId, { headers: hdr() })).json();
-      if (job.status === "done") { showAnalysis(job.result); return; }
+      if (job.status === "done") { showAnalysis(job.result); if (consented) showCorrections(body.jobId, job.result); return; }
       if (job.status === "failed") { showError(job.error.message, job.error.code); return; }
     }
     showError("Timed out waiting for the result.");

@@ -70,9 +70,10 @@ class EnsembleEngine:
         if t.mrz_lines and r.mrz_lines and t.mrz_lines == r.mrz_lines:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None
-            return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf)
+            return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields=r.fields)
         candidates = [x for x in (t, r) if x.mrz_lines]
         if not candidates:
             return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images))
         best = max(candidates, key=lambda x: _score(x.mrz_lines)[0])      # ties keep Tesseract (listed first)
-        return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None)
+        return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None,
+                            fields=r.fields if r.mrz_lines else {})   # line positions, for reviewer corrections

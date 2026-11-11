@@ -58,7 +58,14 @@ internet-facing host.
 - A new model replaces the current one only if its error rate is lower by `--min-gain`, and only when `--activate`
   is given. Without `--activate` it is registered as a candidate and `report.json` says how to approve it.
 - A worse model is never activated. Rolling back is `register_model.py --activate` on the older id.
-- The service loads models at start, so restart the workers after a switch.
+- No restart is needed after a switch: the PaddleOCR engine notices the changed `models/manifest.json` and loads the
+  newly active model on the next read. The models folder must be shared with (or copied to) every worker machine.
+- Install the weekly schedule with `sudo sh deploy/install_autotrain.sh` (systemd timer, Sunday 02:00; settings in
+  `/etc/visa-ocr/autotrain.env`). Not yet run on a real systemd host.
+- Where corrections come from: on the `/ui` page, tick "Applicant consented to training use" before reading. After the
+  result, the "Corrections for training" panel shows each located line; the reviewer fixes wrong characters and saves.
+  Needs `TRAINING_STORE_DIR` set. MRZ line positions come from the second reader on level pages; for card text lines
+  set `INCLUDE_TEXT_LINES=1`.
 
 Tested: the decisions (skip, candidate, activate, refuse) with the training step replaced. Not tested: the real
 fine-tuning step with production weights on a GPU. Start without `--activate` until a few cycles have been checked by hand.
