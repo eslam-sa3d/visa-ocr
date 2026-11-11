@@ -143,3 +143,70 @@ def test_hard_deadline_setting_is_read(monkeypatch):
     assert config.ocr_deadline() == 2.0
     monkeypatch.setenv("OCR_DEADLINE_SECONDS", "junk")
     assert config.ocr_deadline() == 0.0
+
+
+# ---- readers differ only inside the optional data, at a look-alike its check digit cannot tell apart (real case, 11 Nov 2026)
+def _td3_with_optional(optional: str, number: str = "KB3912527"):
+    from app.mrz import check_digit as _cd
+
+    def check_digit(v):
+        return str(_cd(v))
+    opt = optional.ljust(14, "<")
+    body = number + check_digit(number) + "UTO" + "880402" + check_digit("880402") + "M" + "270202" + check_digit("270202") + opt + check_digit(opt)
+    comp = body[0:10] + body[13:20] + body[21:43]
+    return ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", body + check_digit(comp)]
+
+
+class _Stub:
+    def __init__(self, lines):
+        self.lines = lines
+
+    def extract(self, images, hint):
+        from app.engines.base import EngineOutput
+        return EngineOutput(engine="stub", mrz_lines=self.lines)
+
+
+def _ensemble(a, b):
+    from app.engines.ensemble import EnsembleEngine
+    e = EnsembleEngine.__new__(EnsembleEngine)
+    e.name, e.tesseract, e.rapid = "ensemble", _Stub(a), _Stub(b)
+    return e
+
+
+def test_look_alike_in_optional_data_does_not_block_the_other_fields():
+    from app import pipeline
+    from app.review import Applicant
+    a, b = _td3_with_optional("6901317"), _td3_with_optional("G901317")
+    assert a != b and a[1][28] == "6" and b[1][28] == "G"
+    status, res = pipeline.run([b""], None, Applicant(), _ensemble(a, b))
+    assert status == "done" and res["needsReview"] is False
+    assert res["document"]["optionalData"] == "6901317"                      # the digit fits a field of digits
+    by = {f["code"]: f["severity"] for f in res["flags"]}
+    assert by == {"optional_data_unconfirmed": "warning"}
+    assert res["fieldStatus"]["optionalData"] == "unverified" and res["fieldStatus"]["names"] == "ocr confident"
+    assert res["readers"]["differences"] == [{"line": 2, "position": 29, "tesseract": "6", "rapidocr": "G"}]
+
+
+def test_optional_data_review_setting_forces_review(monkeypatch):
+    from app import pipeline
+    from app.review import Applicant
+    monkeypatch.setenv("OPTIONAL_DATA_REVIEW", "1")
+    status, res = pipeline.run([b""], None, Applicant(), _ensemble(_td3_with_optional("6901317"), _td3_with_optional("G901317")))
+    assert res["needsReview"] is True
+
+
+def test_look_alike_in_the_document_number_still_goes_to_review():
+    from app import pipeline
+    from app.review import Applicant
+    a, b = _td3_with_optional("6901317", "KB3912527"), _td3_with_optional("6901317", "KB39L2527")
+    status, res = pipeline.run([b""], None, Applicant(), _ensemble(a, b))
+    assert res["needsReview"] is True and "unprotected_fields_unverified" in {f["code"] for f in res["flags"]}
+
+
+def test_a_name_difference_still_goes_to_review():
+    from app import pipeline
+    from app.review import Applicant
+    a = _td3_with_optional("6901317")
+    b = [a[0].replace("ANNA", "ANNE"), a[1]]
+    status, res = pipeline.run([b""], None, Applicant(), _ensemble(a, b))
+    assert res["needsReview"] is True

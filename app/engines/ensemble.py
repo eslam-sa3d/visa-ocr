@@ -35,6 +35,43 @@ def _score(lines):
     return sum(checks.values()), all(checks.values())
 
 
+_KEY_FIELDS = ("format", "type_code", "issuing_state", "surname", "given_names", "document_number", "nationality", "birth_date",
+               "sex", "expiry_date")
+
+
+def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
+    """Two readings that both pass every check digit and give the same value for every field except the optional data.
+    Returns the lines to use, or None. Not for visas: their optional data has no check digit at all.
+
+    Where the readings differ, the character that fits the rest of that optional field is taken (a digit in a field of digits,
+    a letter in a field of letters); the field is still reported as unconfirmed."""
+    try:
+        pa, pb = parse_mrz(a), parse_mrz(b)
+    except MrzError:
+        return None
+    if not (pa.valid and pb.valid) or pa.format in ("MRVA", "MRVB") or pa.corrected_fields or pb.corrected_fields:
+        return None
+    if any(getattr(pa, f) != getattr(pb, f) for f in _KEY_FIELDS):
+        return None
+    if len(a) != len(b) or any(len(x) != len(y) for x, y in zip(a, b)):
+        return None
+    merged = []
+    for la, lb in zip(a, b):
+        out = list(la)
+        for i, (x, y) in enumerate(zip(la, lb)):
+            if x != y:
+                near = [c for c in la[max(0, i - 6):i + 7] if c.isalnum() and c not in (x, y)]
+                digits = sum(c.isdigit() for c in near)
+                want_digit = digits * 2 >= len(near)
+                out[i] = next((c for c in (x, y) if c.isdigit() == want_digit), x)
+        merged.append("".join(out))
+    try:
+        pm = parse_mrz(merged)
+    except MrzError:
+        return a
+    return merged if pm.valid and all(getattr(pm, f) == getattr(pa, f) for f in _KEY_FIELDS) else a
+
+
 def _differences(a: list[str] | None, b: list[str] | None) -> list[dict]:
     """Where two MRZ readings differ: line, position, and the character each reader saw (first 12 only)."""
     out: list[dict] = []
@@ -108,6 +145,14 @@ class EnsembleEngine:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None
             return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields={**r.fields, "readers": readers})
+        if t.mrz_lines and r.mrz_lines:
+            merged = _agree_except_optional(t.mrz_lines, r.mrz_lines)
+            if merged:
+                # Every field a decision rests on is identical in both readings; they differ only inside the optional data
+                # (personal number), at characters its check digit cannot tell apart. The rest is confirmed; that field is not.
+                readers["agree"] = "all fields except optional data"
+                return EngineOutput(engine=self.name, mrz_lines=merged, mrz_confidence=agreement_confidence(),
+                                    fields={**r.fields, "readers": readers, "unconfirmedFields": ["optionalData"]})
         candidates = [x for x in (t, r) if x.mrz_lines]
         if not candidates:
             return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images, started))

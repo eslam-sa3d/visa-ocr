@@ -152,6 +152,17 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         if (output.fields or {}).get("readers"):
             result["readers"] = output.fields["readers"]
         result["fields"].pop("readers", None)
+        if "optionalData" in (result["fields"].pop("unconfirmedFields", None) or []):
+            # The two readers agree on everything else. This field is shown, marked unverified, and does not force a review
+            # unless OPTIONAL_DATA_REVIEW=1: the portal does not use a passport's personal number for a decision.
+            strict = config.optional_data_review()
+            result.setdefault("fieldStatus", {})["optionalData"] = "unverified"
+            result["flags"].append({"code": "optional_data_unconfirmed", "severity": "error" if strict else "warning",
+                                    "message": "The two readers differ inside the optional data (personal number) at characters its "
+                                               "check digit cannot tell apart, such as 6/G. All other fields agree. Do not rely on "
+                                               "the optional data without checking it."})
+            if strict:
+                result["needsReview"] = True
         boxes = result["fields"].get("mrzLineBoxes")
         wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data
         if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
