@@ -210,3 +210,48 @@ def test_a_name_difference_still_goes_to_review():
     b = [a[0].replace("ANNA", "ANNE"), a[1]]
     status, res = pipeline.run([b""], None, Applicant(), _ensemble(a, b))
     assert res["needsReview"] is True
+
+
+# ---- small scan: the second reader gets only line 2 (real case, 11 Nov 2026)
+class _StubLone(_Stub):
+    def __init__(self, line2):
+        self.line2 = line2
+
+    def extract(self, images, hint):
+        from app.engines.base import EngineOutput
+        return EngineOutput(engine="stub", mrz_lines=None, fields={"mrzLine2": self.line2})
+
+
+def test_lone_line2_is_found_only_when_every_check_passes():
+    from app.mrz import lone_passport_line2
+    good = _td3_with_optional("6901317")[1]
+    assert lone_passport_line2(["SOME TEXT", good]) == good
+    assert lone_passport_line2([good[:20] + "2" + good[21:]]) is None                    # sex position holds a digit
+    assert lone_passport_line2([good[:14] + ("1" if good[14] != "1" else "2") + good[15:]]) is None   # a birth-date digit changed
+    assert lone_passport_line2([good[:-1]]) is None
+
+
+def test_proven_line2_replaces_a_misread_one_and_names_stay_unverified():
+    from app import pipeline
+    from app.review import Applicant
+    good = _td3_with_optional("6901317")
+    bad2 = "F" + good[1][:-1]                                    # the first reader's line 2 is shifted by one character
+    e = _ensemble([good[0], bad2], None)
+    e.rapid = _StubLone(good[1])
+    status, res = pipeline.run([b""], None, Applicant(), e)
+    assert status == "done" and all(res["document"]["checks"].values())
+    assert res["document"]["documentNumber"] == "KB3912527" and res["needsReview"] is True
+    assert res["fieldStatus"]["names"] == "unverified" and "assembled" in res["readers"]
+
+
+def test_line2_read_the_same_by_both_readers_confirms_number_nationality_and_sex():
+    from app import pipeline
+    from app.review import Applicant
+    good = _td3_with_optional("6901317")
+    e = _ensemble(good, None)
+    e.rapid = _StubLone(good[1])
+    status, res = pipeline.run([b""], None, Applicant(), e)
+    codes = {f["code"] for f in res["flags"]}
+    assert res["needsReview"] is True and "document_number_ambiguous_characters" not in codes     # names: one reader only
+    assert res["fieldStatus"]["names"] == "unverified" and res["fieldStatus"]["sex"] != "unverified"
+    assert res["fieldStatus"]["nationality"] != "unverified"

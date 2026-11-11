@@ -145,6 +145,19 @@ class EnsembleEngine:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None
             return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=conf, fields={**r.fields, "readers": readers})
+        lone = (r.fields or {}).get("mrzLine2") if not r.mrz_lines else None
+        if lone and t.mrz_lines and len(t.mrz_lines) == 2 and len(t.mrz_lines[0]) == 44 and t.mrz_lines[1] != lone:
+            # The second reader got only line 2, with every check digit passing, and the first reader's line 2 is different.
+            # Use the proven line 2 with the first reader's name line. Names stay unverified: only one reader saw them.
+            if not _score(t.mrz_lines)[1] and _score([t.mrz_lines[0], lone])[1]:
+                readers["assembled"] = "line 1 from tesseract, line 2 from rapidocr"
+                return EngineOutput(engine=self.name, mrz_lines=[t.mrz_lines[0], lone], mrz_confidence=None, fields={"readers": readers})
+        readers["rapidocrLine2Only"] = bool(lone)
+        if lone and t.mrz_lines and len(t.mrz_lines) == 2 and t.mrz_lines[1] == lone and _score(t.mrz_lines)[1]:
+            # Both readers read the same line 2 and it passes every check: number, dates, sex and nationality are confirmed twice.
+            readers["agree"] = "line 2"
+            return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=None,
+                                fields={"readers": readers, "line2Agreed": True})
         if t.mrz_lines and r.mrz_lines:
             merged = _agree_except_optional(t.mrz_lines, r.mrz_lines)
             if merged:

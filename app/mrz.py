@@ -470,6 +470,25 @@ def _fit_length(line: str, size: int, max_diff: int = 3) -> str | None:
     return line[: run.start()] + "<" * new_len + line[run.end():]
 
 
+def lone_passport_line2(texts: list[str]) -> str | None:
+    """A passport's second MRZ line found on its own (44 characters, every check digit including the whole-line one passing,
+    nothing corrected). On a small or blurred page a reader often gets this line and not the name line; the document number,
+    dates, sex and nationality are all in it and are proven by its check digits."""
+    dummy = "P<UTOX<<X".ljust(44, FILLER)
+    for t in texts:
+        line = clean_line(str(t))
+        if len(line) != 44 or not re.fullmatch(r"[A-Z0-9<]{44}", line):
+            continue
+        try:
+            r = parse_mrz([dummy, line])
+        except MrzError:
+            continue
+        # sex and nationality have no check digit: accept the line only when they are at least well formed
+        if r.valid and not r.corrected_fields and not r.repaired_fields and line[20] in "MFX<" and re.fullmatch(r"[A-Z<]{3}", line[10:13]):
+            return line
+    return None
+
+
 def lines_confidence(lines: list[str] | None, texts: list[str], scores: list) -> float | None:
     """Lowest OCR score over the detected texts that the returned MRZ lines came from. None when any returned line has no
     detected text that reads exactly the same (a line whose filler run was padded or adjusted was partly made up, so no score
