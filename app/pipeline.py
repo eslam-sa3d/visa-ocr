@@ -163,7 +163,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
 
         result = analyse_mrz(output.mrz_lines)
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines,
-                         line2_agreed=bool((output.fields or {}).get("line2Agreed")))
+                         agreed=(output.fields or {}).get("agreedFields"))
         result["engine"], result["fields"] = output.engine, _fields_out(output)
         if (output.fields or {}).get("readers"):
             result["readers"] = output.fields["readers"]
@@ -180,7 +180,12 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             if strict:
                 result["needsReview"] = True
         result["fields"].pop("mrzLine2", None)
-        result["fields"].pop("line2Agreed", None)
+        result["fields"].pop("agreedFields", None)
+        if result["fields"].pop("numberDisputed", None):
+            result["flags"].append({"code": "document_number_readers_differ", "severity": "error",
+                                    "message": "The two readers read different document numbers and both pass the check digit. "
+                                               "Confirm the number against the document."})
+            result["needsReview"] = True
         if result.get("needsReview"):
             small = _small_image_note(images)
             if small:

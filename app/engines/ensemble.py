@@ -72,6 +72,33 @@ def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
     return merged if pm.valid and all(getattr(pm, f) == getattr(pa, f) for f in _KEY_FIELDS) else a
 
 
+def _repairs(lines: list[str]) -> int:
+    try:
+        p = parse_mrz(lines)
+    except MrzError:
+        return 99
+    return len(p.corrected_fields) + len(p.repaired_fields)
+
+
+def _agreed_fields(a: list[str], b: list[str]) -> list[str]:
+    """Fields with the same value in two readings that BOTH pass every check digit. Two independent readers giving the same
+    value is the evidence for a field no check digit covers, so it is taken field by field: a misread letter in the name does
+    not make the nationality or the sex uncertain."""
+    try:
+        pa, pb = parse_mrz(a), parse_mrz(b)
+    except MrzError:
+        return []
+    if not (pa.valid and pb.valid) or pa.format != pb.format:
+        return []
+    out = [name for name, attrs in (("documentNumber", ("document_number",)), ("nationality", ("nationality",)), ("sex", ("sex",)),
+                                    ("issuingState", ("issuing_state",)), ("documentType", ("type_code",)),
+                                    ("names", ("surname", "given_names")))
+           if all(getattr(pa, x) == getattr(pb, x) for x in attrs)]
+    if "names" in out and any("filler read as letters removed" in c for c in pa.corrected_fields + pb.corrected_fields):
+        out.remove("names")          # a name that needed letters removed is not evidence
+    return out
+
+
 def _differences(a: list[str] | None, b: list[str] | None) -> list[dict]:
     """Where two MRZ readings differ: line, position, and the character each reader saw (first 12 only)."""
     out: list[dict] = []
@@ -157,7 +184,7 @@ class EnsembleEngine:
             # Both readers read the same line 2 and it passes every check: number, dates, sex and nationality are confirmed twice.
             readers["agree"] = "line 2"
             return EngineOutput(engine=self.name, mrz_lines=t.mrz_lines, mrz_confidence=None,
-                                fields={"readers": readers, "line2Agreed": True})
+                                fields={"readers": readers, "agreedFields": ["documentNumber", "nationality", "sex"]})
         if t.mrz_lines and r.mrz_lines:
             merged = _agree_except_optional(t.mrz_lines, r.mrz_lines)
             if merged:
@@ -169,6 +196,14 @@ class EnsembleEngine:
         candidates = [x for x in (t, r) if x.mrz_lines]
         if not candidates:
             return EngineOutput(engine=self.name, mrz_lines=None, fields=self._text_fields(images, started))
-        best = max(candidates, key=lambda x: _score(x.mrz_lines)[0])      # ties keep Tesseract (listed first)
-        return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None,
-                            fields={**(r.fields if r.mrz_lines else {}), "readers": readers})   # line positions, for corrections
+        # Best check-digit score wins. On a tie the cleaner reading wins: one that needed no repair and no letters removed from
+        # the name line (a filler run read as K, S, E ... is the usual damage). Then Tesseract, listed first.
+        best = max(candidates, key=lambda x: (_score(x.mrz_lines)[0], -_repairs(x.mrz_lines)))
+        extra = {**(r.fields if r.mrz_lines else {}), "readers": readers}   # line positions, for reviewer corrections
+        agreed = _agreed_fields(t.mrz_lines, r.mrz_lines) if t.mrz_lines and r.mrz_lines else []
+        if agreed:
+            readers["agree"] = "fields: " + ", ".join(agreed)
+            extra["agreedFields"] = agreed
+            if "documentNumber" not in agreed:
+                extra["numberDisputed"] = True      # both readings pass the check digit with different numbers
+        return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None, fields=extra)

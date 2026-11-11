@@ -107,7 +107,7 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
 
 
 def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: list[dict] | None,
-                     applicant: Applicant, mrz_lines: list[str] | None = None, line2_agreed: bool = False) -> None:
+                     applicant: Applicant, mrz_lines: list[str] | None = None, agreed: list[str] | None = None) -> None:
     """Add review flags to a parsed MRZ result (mutates it)."""
     doc = result["document"]
     flags: list[Flag] = []
@@ -139,16 +139,16 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
             status[name] = "unverified"
         return status[name] != "unverified"
 
-    names_ok = decide("names", verified["names"], v_status == "match")
-    # line2_agreed: two readers read an identical second line that passes every check. Nationality and sex are in that line.
-    nat_ok = decide("nationality", verified["nationality"], line2_agreed)
-    sex_ok = decide("sex", False, line2_agreed)
-    if line2_agreed:
-        for k in ("nationality", "sex"):
-            if status.get(k) == "confirmed by printed page":
-                status[k] = "both readers agree"
-    iss_ok = decide("issuingState", False)
-    type_ok = decide("documentType", False)
+    # agreed: fields two independent readers read identically, in readings that both pass every check digit.
+    agreed = set(agreed or [])
+    names_ok = decide("names", verified["names"], v_status == "match" or "names" in agreed)
+    nat_ok = decide("nationality", verified["nationality"], "nationality" in agreed)
+    sex_ok = decide("sex", False, "sex" in agreed)
+    iss_ok = decide("issuingState", False, "issuingState" in agreed)
+    type_ok = decide("documentType", False, "documentType" in agreed)
+    for k in agreed:
+        if status.get(k) == "confirmed by printed page" and not (k == "names" and v_status == "match"):
+            status[k] = "both readers agree"
     opt_ok = True
     if doc.get("format") in ("MRVA", "MRVB") and doc.get("optionalData"):
         opt_ok = decide("visaOptionalData", False)       # visa optional data has no check digit
@@ -158,7 +158,7 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     # Characters the check digit cannot tell apart (1/L, 6/G, ...): a document number containing them can be wrong silently.
     number = re.sub(r"[^A-Z0-9]", "", (doc.get("documentNumber") or "").upper())
     form_number = re.sub(r"[^A-Z0-9]", "", (applicant.document_number or "").upper())
-    if re.search(r"[1L6G]", number) and not confident and not line2_agreed and form_number != number:
+    if re.search(r"[1L6G]", number) and not confident and "documentNumber" not in agreed and form_number != number:
         flags.append(Flag("document_number_ambiguous_characters", "error",
                           "The document number contains characters the check digit cannot tell apart (1/L, 6/G). "
                           "Confirm it against the document or enter it on the form."))
