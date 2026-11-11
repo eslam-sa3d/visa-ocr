@@ -200,7 +200,7 @@ def test_look_alike_in_the_document_number_still_goes_to_review():
     from app.review import Applicant
     a, b = _td3_with_optional("6901317", "KB3912527"), _td3_with_optional("6901317", "KB39L2527")
     status, res = pipeline.run([b""], None, Applicant(), _ensemble(a, b))
-    assert res["needsReview"] is True and "unprotected_fields_unverified" in {f["code"] for f in res["flags"]}
+    assert res["needsReview"] is True and "document_number_readers_differ" in {f["code"] for f in res["flags"]}
 
 
 def test_a_name_difference_still_goes_to_review():
@@ -255,3 +255,20 @@ def test_line2_read_the_same_by_both_readers_confirms_number_nationality_and_sex
     assert res["needsReview"] is True and "document_number_ambiguous_characters" not in codes     # names: one reader only
     assert res["fieldStatus"]["names"] == "unverified" and res["fieldStatus"]["sex"] != "unverified"
     assert res["fieldStatus"]["nationality"] != "unverified"
+
+
+def test_field_by_field_agreement_and_the_cleaner_name_line_wins():
+    """Real case: both readers read line 2 the same; one read a name letter wrong and the trailing fillers as K."""
+    from app import pipeline
+    from app.review import Applicant
+    good = _td3_with_optional("6901317")
+    damaged = ["P<UTOERIKSSON<<ANNA<MARLA<<<<<<<SKKKKKKKKKKK", good[1]]
+    assert len(damaged[0]) == 44
+    status, res = pipeline.run([b""], None, Applicant(), _ensemble(damaged, good))        # the damaged reading is listed first
+    assert res["document"]["givenNames"] == "ANNA MARIA"                                  # the clean reading is the one shown
+    fs = res["fieldStatus"]
+    assert fs["names"] == "unverified" and res["needsReview"] is True                     # the readers differ on the name
+    assert fs["nationality"] == fs["sex"] == fs["issuingState"] == fs["documentType"] == "both readers agree"
+    flags = {f["code"]: f["message"] for f in res["flags"]}
+    assert "document_number_ambiguous_characters" not in flags
+    assert "names" in flags["unprotected_fields_unverified"] and "nationality" not in flags["unprotected_fields_unverified"]
