@@ -136,6 +136,7 @@ Main parts of a finished job:
 |---|---|
 | `status` | `queued`, `processing`, `done` or `failed` |
 | `result.document` | The fields: `documentNumber`, `surname`, `givenNames`, `nationality`, `birthDate`, `expiryDate`, `sex`, `issuingState`, `checks` |
+| `result.mrz` | The MRZ exactly as read: `format` (TD1, TD2, TD3, MRVA, MRVB) and `lines` (2 or 3 strings). Absent for cards without an MRZ |
 | `result.needsReview` | `true` when a person must check it |
 | `result.flags` | Each problem found: `code`, `severity` (`error` forces review), `message` |
 | `result.fieldStatus` | How each unprotected field was verified |

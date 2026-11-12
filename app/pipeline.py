@@ -27,8 +27,10 @@ def analyse_mrz(lines: list[str]) -> dict:
     """Parse and validate MRZ lines that are already text (no OCR involved)."""
     parsed = parse_mrz(lines)
     flags = validate(parsed)
-    return {"document": parsed.to_dict(), "flags": [f.to_dict() for f in flags],
-            "needsReview": any(f.severity == "error" for f in flags)}
+    # "mrz" carries the lines exactly as they were read (or pasted), so the caller can store or re-check them. When a look-alike
+    # character was corrected, the corrected value is in "document" and the change is listed in document.correctedFields.
+    return {"document": parsed.to_dict(), "mrz": {"format": parsed.format, "lines": list(lines)},
+            "flags": [f.to_dict() for f in flags], "needsReview": any(f.severity == "error" for f in flags)}
 
 
 def _fallback_mrz(images: list[bytes], hint: str | None) -> list[str] | None:
