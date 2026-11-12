@@ -167,6 +167,10 @@ function showAnalysis(res) {
   const table = el("table");
   LABELS.forEach(([key, label]) => { if (doc[key] !== undefined && doc[key] !== "") table.append(el("tr", {}, el("td", {}, label), el("td", { dir: "auto" }, String(doc[key])))); });
   out.append(table);
+  if (res.mrz && res.mrz.lines) {
+    out.append(el("h2", { style: "margin-top:14px" }, "MRZ as read"));
+    out.append(el("pre", { style: "font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;overflow-x:auto" }, res.mrz.lines.join("\n")));
+  }
   out.append(el("h2", { style: "margin-top:14px" }, "Check digits"));
   const ul = el("ul");
   Object.entries(doc.checks).forEach(([k, ok]) => ul.append(el("li", { className: ok ? "pass" : "fail" }, (ok ? "✓ " : "✗ ") + (CHECKS[k] || k))));

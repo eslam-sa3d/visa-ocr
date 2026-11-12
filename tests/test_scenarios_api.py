@@ -162,3 +162,14 @@ def test_api_expected_nationality_end_to_end(monkeypatch):
                     data={"expected_nationality": "SAU"})
     job = client.get(f"/v1/jobs/{r.json()['jobId']}").json()
     assert "nationality_mismatch" in [f["code"] for f in job["result"]["flags"]] and job["result"]["needsReview"]
+
+
+def test_response_carries_the_mrz_lines_as_read():
+    lines = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    from app.pipeline import analyse_mrz
+    res = analyse_mrz(lines)
+    assert res["mrz"] == {"format": "TD3", "lines": lines}
+    from fastapi.testclient import TestClient
+    import app.main as main
+    body = TestClient(main.app).post("/v1/mrz/parse", json={"lines": lines}).json()
+    assert body["mrz"]["lines"] == lines and body["mrz"]["format"] == "TD3"
