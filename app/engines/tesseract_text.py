@@ -5,7 +5,6 @@ the same shape the PaddleOCR engine returns, so app/visual_zone.py reads both th
 from __future__ import annotations
 
 import io
-import os
 import time
 from collections import defaultdict
 
@@ -52,7 +51,7 @@ def read_text_lines(images: list[bytes], langs: str | None = None, budget_second
         from PIL import Image, ImageOps
     except ImportError as exc:  # pragma: no cover
         raise EngineUnavailable(f"Missing Python dependency: {exc.name}") from exc
-    langs = langs or os.environ.get("TESSERACT_TEXT_LANGS", "ara+eng")
+    langs = langs or app_config.tesseract_text_langs()
     have = available_langs()
     wanted = [l for l in langs.split("+") if l in have]
     if not wanted:

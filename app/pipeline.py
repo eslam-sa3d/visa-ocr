@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
-import os
-
 import logging
-
+import traceback
 
 from . import config
 from .uploads import shrink_for_ocr
@@ -16,9 +14,19 @@ from .engines.base import Engine, EngineOutput
 from .mrz import MrzError, parse_mrz
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
-from .visual_zone import parse_gcc_id
+from .visual_zone import hijri_expiry_flag, parse_gcc_id
 
 log = logging.getLogger("visa-ocr")
+
+def where(exc: BaseException) -> str:
+    """'file.py:123 in function' of the innermost frame. Logged instead of a traceback with messages: an error text from a
+    date or number parser can repeat a value read from the document, and logs must not hold personal data."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "unknown"
+    f = frames[-1]
+    return f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno} in {f.name}"
+
 
 _DECODE_ERRORS = ("UnidentifiedImageError", "DecompressionBombError", "DecompressionBombWarning")
 
@@ -37,7 +45,8 @@ def _fallback_mrz(images: list[bytes], hint: str | None) -> list[str] | None:
     """Second opinion: the MRZ-only engine is good at the bottom band of a passport or visa."""
     try:
         return get_engine_by_name("tesseract-mrz").extract(images, hint).mrz_lines
-    except Exception:  # noqa: BLE001 - optional fallback; never fail the job because of it
+    except Exception as exc:  # noqa: BLE001 - optional fallback; never fail the job because of it
+        log.warning("MRZ fallback reader failed: %s at %s", type(exc).__name__, where(exc))
         return None
 
 
@@ -88,7 +97,8 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     try:
         from .engines.tesseract_text import read_text_lines
         second = parse_gcc_id(read_text_lines(images))
-    except Exception:  # noqa: BLE001 - the second reader is a bonus; its absence must not break the first reading
+    except Exception as exc:  # noqa: BLE001 - the second reader is a bonus; its absence must not break the first reading
+        log.warning("second card reader failed: %s at %s", type(exc).__name__, where(exc))
         return result
     sdoc, filled = second["document"], []
     for k in missing:
@@ -112,9 +122,9 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     try:
         if "expiryDate" in filled:
             if doc.get("expiryCalendar") != "gregorian":
-                if "expiry_hijri_not_checked" not in codes:
-                    result["flags"].append({"code": "expiry_hijri_not_checked", "severity": "error" if auto else "warning",
-                                            "message": "Expiry is a Hijri date; expiry check needs the Gregorian date"})
+                flag = hijri_expiry_flag(doc, date.today(), auto).to_dict()
+                if flag["code"] not in codes:
+                    result["flags"].append(flag)
             elif date.fromisoformat(doc["expiryDate"]) < date.today() and "document_expired" not in codes:
                 result["flags"].append({"code": "document_expired", "severity": "error", "message": "The document has expired"})
         if "birthDate" in filled and doc.get("birthCalendar") == "gregorian" and date.fromisoformat(doc["birthDate"]) > date.today():
@@ -193,7 +203,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             if small:
                 result["flags"].append({"code": "image_low_resolution", "severity": "warning", "message": small})
         boxes = result["fields"].get("mrzLineBoxes")
-        wanted = config.include_text_lines() or bool(os.environ.get("TRAINING_STORE_DIR"))   # raw text is personal data
+        wanted = config.include_text_lines() or bool(config.training_store_dir())   # raw text is personal data
         if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
             result["fields"]["mrzLineBoxes"] = [{**b, "text": t} for b, t in zip(boxes, output.mrz_lines)]
         else:
@@ -209,5 +219,5 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         if type(exc).__name__ in _DECODE_ERRORS or broken:     # a cut-off or damaged upload is the caller's file, not a fault here
             log.warning("unreadable image: %s", type(exc).__name__)
             return "failed", {"code": "invalid_image", "message": "The image could not be decoded. Upload the photo again."}
-        log.exception("processing failed")
+        log.error("processing failed: %s at %s", type(exc).__name__, where(exc))
         return "failed", {"code": "internal_error", "message": "Processing failed"}

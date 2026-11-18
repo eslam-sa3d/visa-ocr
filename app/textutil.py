@@ -55,3 +55,20 @@ def dedupe_overlapping(lines: list[dict]) -> list[dict]:
         if not any(_same_box(ln.get("box") or [], k.get("box") or []) for k in kept):
             kept.append(ln)
     return [l for l in lines if any(l is k for k in kept)]
+
+
+HIJRI_MARGIN_DAYS = 3
+
+
+def hijri_to_gregorian(year: int, month: int, day: int):
+    """Approximate Gregorian date for a Hijri date, by the arithmetic (tabular) calendar. Saudi documents follow the Umm
+    al-Qura calendar, which is set by astronomical calculation and can differ from this by a day or two, so use the result
+    only with HIJRI_MARGIN_DAYS of doubt on either side. Returns None for a date that cannot exist."""
+    from datetime import date
+    if not (1 <= month <= 12 and 1 <= day <= 30 and 1 <= year <= 2000):
+        return None
+    jdn = (11 * year + 3) // 30 + 354 * year + 30 * month - (month - 1) // 2 + day + 1948440 - 385
+    try:
+        return date.fromordinal(jdn - 1721425)
+    except (ValueError, OverflowError):
+        return None

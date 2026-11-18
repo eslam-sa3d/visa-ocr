@@ -212,3 +212,23 @@ Line crops and label files made for a training run are deleted when the run ends
 | Many documents go to review | Names have no check digit and the two readers disagreed | Send the applicant's form data (`expected_*`) so it can confirm them |
 | Changes not visible after an update | The service does not reload code | Restart the container or process |
 | zsh: errors when pasting commands | Comments (`#`) or `<placeholders>` in the pasted text | Paste one command at a time, without the comment lines |
+
+## Settings and behaviour added after the engineering and ML review
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `JOB_MAX_SECONDS` | 600 | A job still queued or running after this long is marked failed (`timed_out`) and frees its place. |
+| `RAPIDOCR_SESSIONS` | up to 2 | RapidOCR readers that can work at the same time. Each uses memory; more than the number of free cores does not help. |
+| `ALLOW_UNVERIFIED_MODELS` | off | Development only: load a model that has no checksum in the manifest. |
+| `MANIFEST_HMAC_KEY_FILE` | unset | File holding the secret that signs and verifies `models/manifest.json`. |
+| `DATA_KEY_FILE` | unset | File holding the key the service encrypts stored personal data with (docs/SECURITY.md). |
+| `PADDLE_SHARED_DETECTION` | off | PaddleOCR engine only: find the text boxes once and let each language model read them, instead of once per language. Falls back to the usual path on any error. Not yet run with real models: try it on a test server first. |
+| `DATA_AT_REST_ENCRYPTED` | off | Set to 1 once the job database and training store are on encrypted volumes; removes the `/readyz` warning. |
+
+- A correction is answered with `"status": "pending"`. It is used for training only after approval (docs/MODEL_TRAINING.md).
+- `OCR_CONCURRENCY` no longer has an effect: PaddleOCR reads one document at a time per process. Run more worker processes for more throughput.
+- If one of the two readers fails on a document, the other one's reading is used and the result lists the failed reader under `readers.failed`; it goes to review like any single reading.
+- When the two readers differ only in the optional data (for example 6 or G) and the printed page shows the value as one of them read it, that value is used and nothing is left unconfirmed.
+- A Hijri expiry date is converted approximately. More than 3 days past is `document_expired`; more than 3 days ahead is noted (`expiry_hijri_converted`) with the converted date in `expiryDateGregorianApprox`; anything closer still needs a person (`expiry_hijri_not_checked`).
+- `python tools/suggest_deadline.py` measures this server and suggests a value for `OCR_DEADLINE_SECONDS`. The limit now runs from the start of the read, including any wait for a free reader.
+- `python tools/accuracy_real.py /secure/specimens` scores a labelled folder of real documents; `REAL_SAMPLES_DIR=/secure/specimens pytest` makes it a release gate.

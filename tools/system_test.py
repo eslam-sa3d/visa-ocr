@@ -270,7 +270,7 @@ def functional(api: Api, a) -> None:
         boxes = (done["result"].get("fields") or {}).get("mrzLineBoxes")
         assert boxes and all("text" in b for b in boxes), "line positions for the reviewer are missing"
         c = api.post(f"/v1/jobs/{jid}/corrections", json=body)
-        assert c.status_code == 201 and c.json() == {"stored": True, "lines": 1}, c.text
+        assert c.status_code == 201 and c.json() == {"stored": True, "status": "pending", "lines": 1}, c.text
         r2 = api.upload([data])
         api.wait(r2.json()["jobId"])
         assert api.post(f"/v1/jobs/{r2.json()['jobId']}/corrections", json=body).status_code == 409
@@ -279,7 +279,7 @@ def functional(api: Api, a) -> None:
         if not a.store_dir:
             return ("skip", "corrections OK; purge step needs --store-dir on the same host")
         store = Path(a.store_dir)
-        assert (store / "jobs" / jid / "correction.json").exists() and list((store / "jobs" / jid / "images").iterdir())
+        assert list((store / "jobs" / jid / "corrections").glob("*.json")) and list((store / "jobs" / jid / "images").iterdir())
         modes = {oct(p.stat().st_mode & 0o777) for p in (store / "jobs" / jid).rglob("*")}
         assert modes <= {"0o600", "0o700"}, f"training files not owner-only: {modes}"
         subprocess.run([sys.executable, str(HERE / "purge_training.py"), "--store-dir", str(store), "--job-id", jid], check=True, capture_output=True)

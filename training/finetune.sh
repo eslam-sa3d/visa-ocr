@@ -19,9 +19,26 @@
 set -euo pipefail
 
 : "${PADDLEOCR_DIR:?set PADDLEOCR_DIR}" "${BASE_CONFIG:?set BASE_CONFIG}"
-PRETRAINED="${PRETRAINED:-}"   # empty = train from scratch: only for checking the pipeline, never for a real model
+PRETRAINED="${PRETRAINED:-}"
 USE_GPU="${USE_GPU:-true}"
-[ -n "$PRETRAINED" ] || echo "WARNING: no PRETRAINED weights: training from scratch (pipeline check only)" >&2
+# Nothing here may reach the network: the training server is offline, and a silent download attempt would hang the run.
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# Training from scratch never gives a usable model, so it is refused unless asked for by name (a pipeline check).
+if [ -z "$PRETRAINED" ] && [ "${ALLOW_SCRATCH:-0}" != "1" ]; then
+  echo "ERROR: PRETRAINED is not set. Set it to the pretrained training weights, or ALLOW_SCRATCH=1 for a pipeline check only." >&2
+  exit 1
+fi
+# A training checkpoint is loaded as code can be (it is a pickle file), so its checksum is checked before every run.
+if [ -n "$PRETRAINED" ]; then
+  [ -f "$PRETRAINED.pdparams" ] || { echo "ERROR: $PRETRAINED.pdparams not found" >&2; exit 1; }
+  if [ -n "${PRETRAINED_SHA256:-}" ]; then
+    GOT="$(sha256sum "$PRETRAINED.pdparams" | cut -d' ' -f1)"
+    [ "$GOT" = "$PRETRAINED_SHA256" ] || { echo "ERROR: $PRETRAINED.pdparams does not match PRETRAINED_SHA256" >&2; exit 1; }
+  elif [ "${ALLOW_UNVERIFIED_PRETRAINED:-0}" != "1" ]; then
+    echo "ERROR: set PRETRAINED_SHA256 to the SHA-256 of $PRETRAINED.pdparams (sha256sum prints it), or ALLOW_UNVERIFIED_PRETRAINED=1." >&2
+    exit 1
+  fi
+fi
 : "${DATA_DIR:?set DATA_DIR}" "${OUT_DIR:?set OUT_DIR}"
 EPOCHS="${EPOCHS:-30}"
 BATCH="${BATCH:-64}"
@@ -37,6 +54,7 @@ python3 tools/train.py -c "$BASE_CONFIG" -o \
   Global.pretrained_model="$PRETRAINED" \
   Global.save_model_dir="$OUT_DIR/train" \
   Global.epoch_num="$EPOCHS" \
+  Global.seed="${SEED:-1}" \
   Global.eval_batch_step="[0,${EVAL_STEP:-50}]" \
   Train.dataset.data_dir="$DATA_DIR" \
   Train.dataset.label_file_list="[$DATA_DIR/train.txt]" \

@@ -13,8 +13,8 @@ document templates or a layout model.
 from __future__ import annotations
 
 import io
+import logging
 import os
-import re
 import threading
 
 # Offline by construction: never let PaddleX check or fetch models from the internet.
@@ -25,9 +25,12 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from .. import config
 from ..mrz import find_mrz_lines, lines_confidence
 from ..uploads import upscaled_size
-from ..model_registry import Registry
+from ..model_registry import ManifestError, Registry
 from ..textutil import dedupe_overlapping, script_of, to_ascii_digits
 from .base import EngineOutput, EngineUnavailable
+
+
+log = logging.getLogger("visa-ocr")
 
 
 def _result_dict(res) -> dict:
@@ -46,17 +49,63 @@ def _mrz_score(found, texts, scores) -> float | None:
     return lines_confidence(found, [str(t) for t in texts], list(scores))
 
 
+class SharedReader:
+    """One text detector and one recogniser per language: the text boxes are found once and each recogniser reads the same
+    crops. The usual pipeline (one PaddleOCR object per language) finds the boxes again for every language, which is most
+    of the reading time on a page with little text. The steps are the ones the PaddleX OCR pipeline takes: detect, sort
+    the boxes top to bottom, cut each one out level, recognise."""
+
+    def __init__(self, detector, recognisers: dict, crop, sort) -> None:
+        self.detector, self.recognisers, self.crop, self.sort = detector, recognisers, crop, sort
+
+    def read(self, array, index: int) -> list[dict]:
+        polys = []
+        for res in self.detector.predict(array):
+            polys += list(_result_dict(res).get("dt_polys", []))
+        polys = list(self.sort(polys)) if polys else []
+        kept, crops = [], []
+        for poly, sub in zip(polys, self.crop(array, polys) if polys else []):
+            if getattr(sub, "size", 0) > 0 and sub.shape[0] > 0 and sub.shape[1] > 0:
+                kept.append(poly)
+                crops.append(sub)
+        lines: list[dict] = []
+        if not crops:
+            return lines
+        for lang, rec in self.recognisers.items():
+            results = list(rec.predict(crops))
+            if len(results) != len(crops):
+                raise RuntimeError("the recogniser did not answer for every text box")
+            for poly, res in zip(kept, results):
+                d = _result_dict(res)
+                text = d.get("rec_text", "")
+                text = str(text[0] if isinstance(text, (list, tuple)) and text else text)
+                if not text.strip():
+                    continue
+                score = d.get("rec_score")
+                score = score[0] if isinstance(score, (list, tuple)) and score else score
+                lines.append({"image": index, "lang": lang, "text": text, "normalizedText": to_ascii_digits(text),
+                              "script": script_of(text), "score": round(float(score), 4) if score is not None else None,
+                              "box": [[int(x), int(y)] for x, y in (poly.tolist() if hasattr(poly, "tolist") else poly)]})
+        return lines
+
+
 class PaddleOcrEngine:
     name = "paddle-ocr"
 
     def __init__(self, registry: Registry | None = None, langs: list[str] | None = None) -> None:
         self.registry = registry or Registry()
-        self.langs = langs or [l.strip() for l in os.environ.get("OCR_LANGS", "en,ar").split(",") if l.strip()]
+        self.langs = langs or config.ocr_langs()
         self._readers: dict[str, object] = {}
         self._stamp: tuple = self._manifest_stamp()
         self._used_models: dict[str, dict] = {}
+        self._shared: SharedReader | None = None               # PADDLE_SHARED_DETECTION=1: one detector for all languages
+        self._shared_used: dict[str, dict] = {}
+        self._shared_stamp: tuple = ()
+        self._shared_off = False                               # set when the shared path failed; the usual path is used
         self._init_lock = threading.Lock()                     # one model load at a time
-        self._infer = threading.Semaphore(config.ocr_concurrency())  # Paddle predictors are not re-entrant
+        # Paddle predictors are not re-entrant and each language has one predictor, so reads go one at a time whatever
+        # OCR_CONCURRENCY says. More throughput on this engine means more worker processes, not more threads.
+        self._infer = threading.Lock()
 
     # -- loading -----------------------------------------------------------------------
     def _paddle_class(self):
@@ -67,12 +116,16 @@ class PaddleOcrEngine:
         return PaddleOCR
 
     def _checked(self, task: str, lang: str):
-        m = self.registry.active(task, lang)
-        if m is None:
-            raise EngineUnavailable(f"No active {task} model registered for language '{lang}'")
-        status = self.registry.status(m)
-        if status in ("missing", "mismatch"):
-            raise EngineUnavailable(f"Model {m.id} is {status}")
+        try:
+            m = self.registry.active(task, lang)
+            if m is None:
+                raise EngineUnavailable(f"No active {task} model registered for language '{lang}'")
+            ok, status = self.registry.usable(m)            # every file is hashed again before a model is loaded
+        except ManifestError as exc:
+            raise EngineUnavailable(f"Model manifest refused: {exc}") from exc
+        if not ok:
+            hint = " (no checksum recorded; run training/register_model.py or tools/fetch_models.py)" if status == "unverified" else ""
+            raise EngineUnavailable(f"Model {m.id} is {status}{hint}")
         return m
 
     def _manifest_stamp(self) -> tuple:
@@ -89,15 +142,83 @@ class PaddleOcrEngine:
         if stamp != self._stamp:
             with self._init_lock:
                 if stamp != self._stamp:
-                    self._readers, self._used_models, self._stamp = {}, {}, stamp
-        if lang in self._readers:
-            return self._readers[lang]
+                    self._switch(stamp)
+        readers = self._readers                              # one consistent set, even if a switch happens right now
+        if lang in readers:
+            return readers[lang]
         with self._init_lock:
             if lang not in self._readers:
-                self._readers[lang] = self._build_reader(lang)
+                reader = self._build_reader(lang, self._used_models)
+                self._readers = {**self._readers, lang: reader}
         return self._readers[lang]
 
-    def _build_reader(self, lang: str):
+    def _switch(self, stamp: tuple) -> None:
+        """The manifest changed. Load and try the newly active models first; only when every one of them works do they
+        replace the models in use. If anything fails (half-copied folder, wrong checksum, unreadable manifest) the models in
+        use stay, and the failure is logged. Readers that were never loaded are simply loaded from the new manifest."""
+        if not self._readers:
+            self._stamp = stamp
+            return
+        used: dict[str, dict] = {}
+        try:
+            fresh = {lang: self._build_reader(lang, used) for lang in self._readers}
+            for reader in fresh.values():
+                self._smoke(reader)
+        except Exception as exc:  # noqa: BLE001 - whatever went wrong, keep serving with the models already loaded
+            log.error("model switch refused; keeping the models in use: %s: %s", type(exc).__name__, exc)
+            self._stamp = stamp                               # do not retry on every request; the next manifest change will
+            return
+        self._readers, self._used_models, self._stamp = fresh, used, stamp
+        log.info("model switch done: %s", ", ".join(f"{k}={v['id']}" for k, v in sorted(used.items())))
+
+    @staticmethod
+    def _smoke(reader) -> None:
+        """One read of a blank image: proves the weights load and run before they take over."""
+        import numpy as np  # noqa: WPS433
+        list(reader.predict(np.full((64, 256, 3), 255, dtype="uint8")))
+
+    def _build_shared(self) -> tuple[SharedReader, dict]:
+        try:
+            from paddleocr import TextDetection, TextRecognition  # noqa: WPS433
+            from paddlex.inference.pipelines.components import CropByPolys, SortQuadBoxes  # noqa: WPS433
+        except ImportError as exc:
+            raise EngineUnavailable("paddleocr is not installed on this host") from exc
+        det = self._checked("text_detection", "any")
+        used: dict[str, dict] = {}
+        recs = {}
+        detector = TextDetection(model_name=det.architecture(), model_dir=str(self.registry.full_path(det)))
+        for lang in self.langs:
+            rec = self._checked("text_recognition", lang)
+            recs[lang] = TextRecognition(model_name=rec.architecture(), model_dir=str(self.registry.full_path(rec)))
+            used[lang] = {"id": rec.id, "version": rec.version, "detector": det.id}
+        return SharedReader(detector, recs, CropByPolys(det_box_type="quad"), SortQuadBoxes()), used
+
+    def _shared_reader(self) -> tuple[SharedReader, dict] | None:
+        """The shared reader for the manifest as it is now, or None when it is off or could not be built. A manifest change
+        builds and tries the new one first and keeps the one in use if that fails, like the usual path."""
+        if not config.paddle_shared_detection() or self._shared_off:
+            return None
+        stamp = self._manifest_stamp()
+        if self._shared is None or stamp != self._shared_stamp:
+            with self._init_lock:
+                if self._shared is None or stamp != self._shared_stamp:
+                    try:
+                        import numpy as np  # noqa: WPS433
+                        fresh, used = self._build_shared()
+                        fresh.read(np.full((64, 256, 3), 255, dtype="uint8"), 0)       # proves the weights load and run
+                    except Exception as exc:  # noqa: BLE001
+                        if self._shared is None:
+                            log.error("shared text detection could not start (%s: %s); using one pipeline per language",
+                                      type(exc).__name__, exc)
+                            self._shared_off = True
+                            return None
+                        log.error("model switch refused; keeping the models in use: %s: %s", type(exc).__name__, exc)
+                        self._shared_stamp = stamp
+                    else:
+                        self._shared, self._shared_used, self._shared_stamp = fresh, used, stamp
+        return self._shared, dict(self._shared_used)
+
+    def _build_reader(self, lang: str, used: dict):
         det = self._checked("text_detection", "any")
         rec = self._checked("text_recognition", lang)
         PaddleOCR = self._paddle_class()
@@ -111,7 +232,7 @@ class PaddleOcrEngine:
             use_textline_orientation=False,
             enable_mkldnn=False,  # oneDNN breaks some x86 CPU builds; speed is fine without it
         )
-        self._used_models[lang] = {"id": rec.id, "version": rec.version, "detector": det.id}
+        used[lang] = {"id": rec.id, "version": rec.version, "detector": det.id}
         return reader
 
     def _mrz_from_bottom_band(self, images, reader, np, Image, ImageOps):
@@ -169,7 +290,27 @@ class PaddleOcrEngine:
             return self._extract(images, np, Image, ImageOps)
 
     def _extract(self, images, np, Image, ImageOps) -> EngineOutput:
+        lines: list[dict] | None = None
+        shared = self._shared_reader()
+        if shared is not None:
+            try:
+                lines = []
+                for index, raw in enumerate(images):
+                    img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+                    lines += shared[0].read(np.array(img), index)
+                used_models = shared[1]
+                readers = {}                                  # the per-language pipelines load only if the MRZ search needs one
+            except Exception as exc:  # noqa: BLE001 - the faster path must never cost a reading
+                log.error("shared text detection failed (%s); using one pipeline per language from now on", type(exc).__name__)
+                self._shared_off, lines = True, None
+        if lines is None:
+            lines, readers, used_models = self._read_per_language(images, np, Image, ImageOps)
+        return self._finish(images, lines, readers, used_models, np, Image, ImageOps)
+
+    def _read_per_language(self, images, np, Image, ImageOps) -> tuple[list[dict], dict, dict]:
+        """The usual path: one PaddleOCR pipeline per language, each finding and reading the text of every page."""
         readers = {lang: self._reader(lang) for lang in self.langs}
+        used_models = dict(self._used_models)                 # the models that read THIS document
         lines: list[dict] = []
         for index, raw in enumerate(images):
             img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
@@ -193,17 +334,21 @@ class PaddleOcrEngine:
                             "score": round(float(scores[i]), 4) if i < len(scores) else None,
                             "box": [[int(x), int(y)] for x, y in (box.tolist() if hasattr(box, "tolist") else box)],
                         })
+        return lines, readers, used_models
 
+    def _finish(self, images, lines: list[dict], readers: dict, used_models: dict, np, Image, ImageOps) -> EngineOutput:
+        """Find the MRZ among the lines (with a second and third look at the page when it is not there), drop duplicate
+        readings of one box, and build the result."""
         mrz = find_mrz_lines([l["text"] for l in lines if l["lang"] == "en"]) or \
             find_mrz_lines([l["text"] for l in lines])
         mrz_conf = None
         if mrz:
-            en = [l for l in lines if l["lang"] == "en"] or lines
             mrz_conf = _mrz_score(mrz, [l["text"] for l in lines], [l["score"] or 0 for l in lines])
-        elif "en" in readers:
-            mrz, mrz_conf = self._mrz_from_bottom_band(images, readers["en"], np, Image, ImageOps)
+        elif "en" in self.langs:
+            en_reader = readers.get("en") or self._reader("en")
+            mrz, mrz_conf = self._mrz_from_bottom_band(images, en_reader, np, Image, ImageOps)
             if not mrz:
-                mrz, mrz_conf = self._mrz_from_variants(images, readers["en"], np, Image, ImageOps)
+                mrz, mrz_conf = self._mrz_from_variants(images, en_reader, np, Image, ImageOps)
         # every language reader reads every box; keep the best reading per box (per image)
         lines = [l for i in range(len(images)) for l in dedupe_overlapping([x for x in lines if x["image"] == i])]
         scores = [l["score"] for l in lines if l["score"] is not None]
@@ -211,6 +356,6 @@ class PaddleOcrEngine:
             engine=self.name,
             mrz_lines=mrz,
             mrz_confidence=mrz_conf,
-            fields={"textLines": lines, "models": self._used_models},
+            fields={"textLines": lines, "models": used_models},
             confidence=round(sum(scores) / len(scores), 4) if scores else None,
         )

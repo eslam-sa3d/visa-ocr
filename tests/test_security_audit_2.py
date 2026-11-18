@@ -1,5 +1,4 @@
 """Regression tests for the second security audit (11 Nov 2026). One block per finding."""
-import asyncio
 import io
 import json
 import os
@@ -328,7 +327,7 @@ def test_stale_and_attempt_settings_have_a_floor(monkeypatch):
 # ------------------------------------------------------------------ 8. second-reader fill is validated after merging
 @pytest.mark.parametrize("second_line,score,expected", [
     ("Expiry Date: 2020/01/01", 0.95, "document_expired"),
-    ("Expiry Date: 1430/01/01", 0.95, "expiry_hijri_not_checked"),
+    ("Expiry Date: 1430/01/01", 0.95, "document_expired"),
     ("Expiry Date: 2035/01/01", 0.40, "low_confidence_fields")])
 def test_filled_expiry_is_checked_under_auto_accept(monkeypatch, second_line, score, expected):
     from app import pipeline
@@ -373,7 +372,7 @@ def test_auto_train_removes_crops_labels_and_old_runs(tmp_path):
     import auto_train
     d = tmp_path / "store" / "jobs" / "job1"
     d.mkdir(parents=True)
-    (d / "correction.json").write_text(json.dumps({"lines": [{"text": "SECRET<<NAME"}] * 3}))
+    (d / "correction.json").write_text(json.dumps({"status": "approved", "approvedBy": "second person", "reviewer": "first person", "lines": [{"text": "SECRET<<NAME"}] * 3}))
     old = tmp_path / "work" / "20200101-0000" / "data"
     old.mkdir(parents=True)
     (old / "real_job0_0.png").write_bytes(b"x")
@@ -397,8 +396,9 @@ def test_auto_train_removes_crops_labels_and_old_runs(tmp_path):
     assert not old.parent.exists()
     assert all("SECRET" not in p.read_text(errors="ignore") and "real_job1" not in p.name for p in left)
 
-    with pytest.raises(RuntimeError):                         # a failed run cleans up as well
-        auto_train.cycle(_train_args(tmp_path, min_val=0), runner=runner, now=datetime.now(timezone.utc) + timedelta(minutes=5))
+    # a failed run is reported, remembered, and cleans up as well
+    failed = auto_train.cycle(_train_args(tmp_path, min_val=0), runner=runner, now=datetime.now(timezone.utc) + timedelta(minutes=5))
+    assert failed["outcome"] == "training_failed"
     assert not [p for p in (tmp_path / "work").rglob("real_*")]
 
 

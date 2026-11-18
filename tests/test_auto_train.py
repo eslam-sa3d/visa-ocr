@@ -13,33 +13,44 @@ from app.model_registry import ModelInfo, Registry  # noqa: E402
 def _store(tmp_path, lines):
     d = tmp_path / "store" / "jobs" / "job1"
     d.mkdir(parents=True)
-    (d / "correction.json").write_text(json.dumps({"lines": [{"text": "x"}] * lines}))
+    (d / "correction.json").write_text(json.dumps({"status": "approved", "approvedBy": "second person", "reviewer": "first person", "lines": [{"text": "x"}] * lines}))
     return tmp_path / "store"
 
 
 def _args(tmp_path, store, **kw):
+    golden = tmp_path / "golden"
+    golden.mkdir(exist_ok=True)
+    (golden / "labels.txt").write_text("".join(f"g{i}.png\tX\n" for i in range(20)))
     base = dict(store_dir=store, work_dir=tmp_path / "work", lang="ar", arch="arch", dict=None, synth_dir=[],
-                models_dir=tmp_path / "models", min_new=10, min_val=5, min_gain=0.002, activate=False)
+                models_dir=tmp_path / "models", min_new=10, min_val=5, min_gain=0.002, activate=False,
+                golden_dir=golden, min_golden=10)
     return Namespace(**{**base, **kw})
 
 
-def _runner(cer_new, cer_old, real_val=50):
+def _runner(cer_new, cer_old, real_val=50, new_extra=None, old_extra=None, seen=None, fail_training=False):
     """Stands in for the subprocess steps. register_model.py runs for real so the registry rules are exercised."""
     def run(cmd, env=None):
         cmd = [str(c) for c in cmd]
         name = Path(cmd[1]).name
         if name == "prepare_dataset.py":
             out = Path(cmd[cmd.index("--out") + 1]); out.mkdir(parents=True)
-            (out / "stats.json").write_text(json.dumps({"realTrain": 400, "realVal": real_val, "synthTrain": 0}))
+            (out / "stats.json").write_text(json.dumps({"realTrain": 400, "realVal": real_val, "synthTrain": 0,
+                                                        "datasetSha256": "d" * 64}))
             (out / "val_real.txt").write_text("a.png\tX\n")
         elif name == "finetune.sh":
+            if fail_training:
+                raise subprocess.CalledProcessError(1, cmd)
             inf = Path(env["OUT_DIR"]) / "inference"; inf.mkdir(parents=True)
             (inf / "inference.pdiparams").write_text("weights")
         elif name == "predict_lines.py":
+            if seen is not None:
+                seen.append(cmd[cmd.index("--labels") + 1])
             Path(cmd[cmd.index("--out") + 1]).write_text("a.png\tX\n")
         elif name == "evaluate.py":
             out = Path(cmd[cmd.index("--out") + 1])
-            out.write_text(json.dumps({"cer": cer_new if "candidate" in out.name else cer_old, "exactMatch": 0.9, "samples": real_val}))
+            cand = "candidate" in out.name
+            out.write_text(json.dumps({"cer": cer_new if cand else cer_old, "exactMatch": 0.9, "samples": 500, "chars": 20000,
+                                       **((new_extra if cand else old_extra) or {})}))
         else:
             subprocess.run(cmd, check=True, env=env)
     return run

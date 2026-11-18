@@ -1,7 +1,10 @@
 # Only needed on the machine that prepares data and trains models (not in the runtime image).
-pillow>=10.0
-arabic-reshaper>=3.0
-python-bidi>=0.4.2
-# PaddleOCR and PaddlePaddle: install the versions that match your pretrained weights.
-# paddlepaddle
-# paddleocr
+# Exact versions, the same ones the tests run with: a model must be traceable to the code that built its dataset.
+pillow==13.0.0
+arabic-reshaper==3.0.0
+python-bidi==0.6.12
+# PaddleOCR and PaddlePaddle must be the versions the pretrained weights were made for. These match requirements.txt;
+# use paddlepaddle-gpu of the same version on a GPU server. auto_train.py records the installed versions in every report.
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+paddlex==3.7.2

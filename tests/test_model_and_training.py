@@ -74,7 +74,9 @@ def test_evaluate_options_and_missing_predictions():
     labels = {"a.png": "أحمد", "b.png": "x"}
     assert ev.evaluate(labels, {"a.png": "احمد"})["cer"] > 0
     m = ev.evaluate(labels, {"a.png": "احمد"}, arabic=True)
-    assert m["cer"] == 0.0 and m["missingPredictions"] == 1
+    # the line with no prediction counts as fully wrong: 1 edit over 4 + 1 characters, and not an exact match
+    assert m["missingPredictions"] == 1 and m["cer"] == 0.2 and m["exactMatch"] == 0.5 and m["samples"] == 2
+    assert ev.evaluate(labels, {"a.png": "احمد", "b.png": "x"}, arabic=True)["cer"] == 0.0
 
 
 # --------------------------------------------------------------------------- registry
@@ -143,7 +145,8 @@ def registry_with_models(tmp_path, status_ok=True):
         if status_ok:
             (reg.base / id_).mkdir(parents=True, exist_ok=True)
             (reg.base / id_ / "w.bin").write_bytes(id_.encode())
-        infos.append(ModelInfo(id=id_, task=task, lang=lang, version="t", path=id_, active=True))
+        infos.append(ModelInfo(id=id_, task=task, lang=lang, version="t", path=id_, active=True,
+                               sha256=dir_sha256(reg.base / id_) if status_ok else None))
     reg.save(infos)
     return reg
 
@@ -215,9 +218,11 @@ def test_corrections_need_store_and_consent(tmp_path, monkeypatch):
 
     consented = upload(client, True)
     r = client.post(f"/v1/jobs/{consented}/corrections", json=CORRECTION)
-    assert r.status_code == 201 and r.json() == {"stored": True, "lines": 1}
-    saved = json.loads((tmp_path / "store" / "jobs" / consented / "correction.json").read_text(encoding="utf-8"))
-    assert saved["lines"][0]["text"] == "محمد"
+    assert r.status_code == 201 and r.json() == {"stored": True, "status": "pending", "lines": 1}
+    files = list((tmp_path / "store" / "jobs" / consented / "corrections").glob("*.json"))
+    saved = json.loads(files[0].read_text(encoding="utf-8"))
+    assert saved["lines"][0]["text"] == "محمد" and saved["status"] == "pending" and saved["approvedBy"] is None
+    assert saved["submittedBy"] and "confidence" in saved["ocr"]
     assert (tmp_path / "store" / "jobs" / consented / "images" / "0.png").exists()
 
     assert client.post("/v1/jobs/unknown/corrections", json=CORRECTION).status_code == 404
@@ -260,7 +265,7 @@ def test_synth_prepare_and_split_pipeline(tmp_path):
         job = store / "jobs" / f"job{n}"
         (job / "images").mkdir(parents=True)
         Image.new("RGB", (300, 100), "white").save(job / "images" / "0.png")
-        (job / "correction.json").write_text(json.dumps({"lines": [
+        (job / "correction.json").write_text(json.dumps({"status": "approved", "approvedBy": "second person", "reviewer": "first person", "lines": [
             {"image": 0, "box": [5, 5, 250, 60], "text": f"محمد {n}", "lang": "ar"},
             {"image": 0, "box": [5, 5, 3, 6], "text": "too small", "lang": "en"}]}), encoding="utf-8")
 
@@ -311,7 +316,8 @@ def test_paddle_engine_picks_up_a_model_switch_without_restart(tmp_path, monkeyp
     for m in models:
         if m.id == "rec_ar":
             m.active = False
-    reg.save(models + [ModelInfo(id="rec_ar2", task="text_recognition", lang="ar", version="t2", path="rec_ar2", active=True)])
+    reg.save(models + [ModelInfo(id="rec_ar2", task="text_recognition", lang="ar", version="t2", path="rec_ar2", active=True,
+                                  sha256=dir_sha256(reg.base / "rec_ar2"))])
     out = engine.extract([png_bytes()], "passport")
     assert out.fields["models"]["ar"]["id"] == "rec_ar2"
 
@@ -346,10 +352,12 @@ def test_ui_flow_consent_then_correction_becomes_a_training_crop(tmp_path, monke
     boxes = job["result"]["fields"]["mrzLineBoxes"]
     assert [b["text"] for b in boxes] == lines
     body = {"reviewer": "tester", "document": {}, "lines": [{"image": b["image"], "box": b["box"], "text": b["text"], "lang": "en"} for b in boxes]}
-    assert client.post(f"/v1/jobs/{r.json()['jobId']}/corrections", json=body).json() == {"stored": True, "lines": 2}
+    assert client.post(f"/v1/jobs/{r.json()['jobId']}/corrections", json=body).json() == {"stored": True, "status": "pending", "lines": 2}
     out = tmp_path / "ds"
     (out / "images").mkdir(parents=True)
-    samples = prepare_dataset.from_store(tmp_path / "store", out)
+    assert prepare_dataset.from_store(tmp_path / "store", out) == []          # pending: not training data yet
+    main.training.decide(r.json()["jobId"], "a second person")
+    samples = prepare_dataset.from_store(tmp_path / "store", out, lang="en")
     assert [s["text"] for s in samples] == lines
     from PIL import Image
     crop = Image.open(out / samples[0]["path"])

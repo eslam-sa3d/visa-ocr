@@ -10,3 +10,4 @@ opencv-contrib-python-headless==4.10.0.84
 onnxruntime==1.29.0
 rapidocr-onnxruntime==1.2.3   # second reader whose models ship inside the wheel; ensemble engine uses it
 psycopg[binary]==3.3.8   # PostgreSQL job store (only used when DATABASE_URL is set)
+cryptography==50.0.1   # encrypts stored personal data when DATA_KEY_FILE is set (app/crypto.py)

@@ -56,3 +56,31 @@ key is checked (put a body-size limit and timeouts on the proxy); PostgreSQL con
 model promotion is scored on validation lines that reviewers supply (keep `--activate` off until an operator-held
 validation set exists). The card parser's slow path on very many text lines is now bounded by `MAX_TEXT_LINES` (250).
 
+
+## Added after the engineering and ML review
+
+- **Models without a checksum are refused.** A model whose manifest entry has no `sha256` no longer loads and `/readyz`
+  reports it. `ALLOW_UNVERIFIED_MODELS=1` allows it for development only. A Tesseract model placed in
+  `MODELS_DIR/tessdata` is used only when `SHA256SUMS` beside it lists it and it matches.
+- **Signed manifest (optional, recommended).** Set `MANIFEST_HMAC_KEY_FILE` (a file with a long random secret, owner-only)
+  on the hosts that register models and on the hosts that serve. The manifest then carries an HMAC-SHA256 over its model
+  list; a manifest without a valid signature is refused. Someone who can write the models folder but does not hold the key
+  can no longer swap a model and its checksum. Sign an existing manifest by re-saving it with the key set, for example
+  `register_model.py --set-metrics <id> --metrics <its metrics.json>`.
+- **Model paths stay inside the models folder.** An entry with `../` or an absolute path is refused.
+- **Storage encryption must be confirmed.** The service writes images (training store, PostgreSQL queue) and results (job
+  database) in plain form and cannot see whether the volume is encrypted. `/readyz` carries a warning until you set
+  `DATA_AT_REST_ENCRYPTED=1`, which you do only after putting those paths on encrypted volumes. Treat the warning as a
+  go-live blocker.
+- **Logs hold no document values.** Errors are logged as type and code location (`ValueError at mrz.py:412 in parse_mrz`),
+  not as tracebacks with messages, because a parser's message can repeat a date or a number.
+- **Corrections are not trusted.** See docs/MODEL_TRAINING.md, "Controls on the learning loop".
+- **Pretrained checkpoints are checked before training.** `finetune.sh` refuses to start unless the SHA-256 of
+  `PRETRAINED.pdparams` equals `PRETRAINED_SHA256` (training checkpoints are pickle files and can carry code).
+- **The service can encrypt what it stores.** Set `DATA_KEY_FILE` to a file holding a key
+  (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`), owner-only and on a
+  different volume from the data. Then training-store images and corrections, results and errors in the job database, and
+  images, form data, results and errors in the PostgreSQL queue are written encrypted (authenticated: a changed file is
+  refused). To rotate, put the new key on the first line and keep the old one below until data written with it has expired.
+  An unusable key file stops the service at start. With a key set, `/readyz` no longer shows the storage warning. This
+  protects a copied disk, dump or backup; it does not protect against someone who can read the key file.

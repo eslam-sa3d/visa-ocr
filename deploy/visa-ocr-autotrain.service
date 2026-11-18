@@ -12,6 +12,16 @@ EnvironmentFile=/etc/visa-ocr/autotrain.env
 # shellcheck disable=SC2086 - AUTOTRAIN_ARGS is split on purpose
 ExecStart=/bin/sh -c 'exec ${PYTHON:-/opt/visa-ocr/.venv/bin/python} training/auto_train.py --store-dir "$TRAINING_STORE_DIR" --work-dir "$AUTOTRAIN_WORK_DIR" --lang "$AUTOTRAIN_LANG" --arch "$AUTOTRAIN_ARCH" --models-dir "$MODELS_DIR" $AUTOTRAIN_ARGS'
 Nice=10
+# Training must never take the machine from the OCR service when both run on one host. Adjust to the server:
+# CPUQuota is a share of ALL cores (400% = four cores), MemoryMax stops a runaway run, the IO lines keep the disk responsive.
+CPUQuota=400%
+CPUWeight=20
+MemoryHigh=12G
+MemoryMax=16G
+IOWeight=20
+IOSchedulingClass=idle
+# A run that hangs is stopped, and the next timer run clears its lock.
+TimeoutStartSec=12h
 # keep the run inside its own folders
 ProtectSystem=full
 PrivateTmp=true

@@ -18,6 +18,8 @@ from pathlib import Path
 
 def main() -> None:
     os.umask(0o077)      # predictions repeat text read from identity documents
+    for name, value in (("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True"), ("HF_HUB_OFFLINE", "1"), ("TRANSFORMERS_OFFLINE", "1")):
+        os.environ.setdefault(name, value)      # the model is read from a local folder; nothing may look online
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--labels", type=Path, required=True)
     ap.add_argument("--image-dir", type=Path, required=True)

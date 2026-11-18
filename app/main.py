@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import re
 import threading
 import time
@@ -30,10 +29,10 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, pipeline, security, worker
+from . import config, crypto, pipeline, security, worker
 from .engines import get_engine
 from .jobs import make_store
-from .model_registry import Registry
+from .model_registry import ManifestError, Registry
 from .mrz import MrzError
 from .review import Applicant, compare_applicant
 from .training_store import TrainingStore
@@ -58,18 +57,31 @@ async def lifespan(_app):
                 days = config.training_retention_days()
                 if training.enabled and days > 0:
                     training.purge_older_than(days)
-            except Exception:  # noqa: BLE001 - a failed sweep must not stop the next one
-                log.warning("housekeeping sweep failed")
+            except Exception as exc:  # noqa: BLE001 - a failed sweep must not stop the next one
+                log.warning("housekeeping sweep failed: %s at %s", type(exc).__name__, pipeline.where(exc))
 
     hk = threading.Thread(target=housekeeping, daemon=True)
     hk.start()
     yield
     stop.set()
+    # Jobs still waiting or running in this process cannot finish after it stops. Say so in the store (it may outlive the
+    # process), so a caller polling for the result gets an answer instead of "queued" until the job expires.
+    with _inflight_lock:
+        left = list(_inflight)
+    for jid in left:
+        try:
+            store.update(jid, status="failed", error={"code": "service_restarted",
+                                                      "message": "The service was restarted. Upload the document again."})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not mark job %s as stopped: %s", jid, type(exc).__name__)
+    shutdown = getattr(_ocr_pool, "shutdown", None)
+    if shutdown:
+        shutdown(wait=False, cancel_futures=True)
 
 
 # The interactive API pages are off unless API_DOCS=1: they are served without a key, describe every endpoint, and load their
 # scripts from a public CDN, which an offline server cannot reach anyway.
-_docs = os.environ.get("API_DOCS", "").strip().lower() in ("1", "true", "yes", "on")
+_docs = config.api_docs()
 app = FastAPI(title="Visa Portal Document OCR", version="0.3.0", lifespan=lifespan,
               docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
               openapi_url="/openapi.json" if _docs else None)
@@ -79,7 +91,10 @@ training = TrainingStore()  # disabled unless TRAINING_STORE_DIR is set
 # take the threads that answer /healthz and job lookups.
 _ocr_pool = ThreadPoolExecutor(max_workers=config.job_threads(), thread_name_prefix="ocr")
 _shrink_slots: asyncio.Semaphore | None = None      # created on first use, inside the running event loop
+_inflight: set[str] = set()                         # in-process jobs accepted and not yet finished
+_inflight_lock = threading.Lock()
 
+crypto.enabled()      # a key file that is set but unusable stops the service here, not at the first upload
 if security.weak_plain_keys():
     log.warning("Some API_KEYS values are shorter than 24 characters. Use long random keys (openssl rand -hex 32).")
 if not security.auth_enabled():       # raises when a key variable is set but holds no usable key: refuse to start
@@ -112,10 +127,15 @@ def _model_problems() -> list[str]:
             return list(_model_cache["problems"])
         registry = Registry()
         out: list[str] = []
-        for m in registry.models():
-            st = registry.status(m) if m.active else "ok"
-            if st in ("missing", "mismatch"):
-                out.append(f"model {m.id} is {st}")
+        try:
+            for m in registry.models():
+                if not m.active:
+                    continue
+                ok, st = registry.usable(m, fresh=False)     # re-hashed only when a file's size or time changed
+                if not ok:
+                    out.append(f"model {m.id} is {st}")
+        except ManifestError as exc:
+            out.append(f"model manifest refused: {exc}")
         _model_cache.update(at=time.monotonic(), problems=out)
         return list(out)
 
@@ -131,13 +151,19 @@ def readyz() -> dict:
     # Which model problems stop the service depends on the engine in use. The Tesseract + RapidOCR pair needs no model files.
     # "auto" falls back to that pair when PaddleOCR models are absent, so a missing model is a warning there; a model whose
     # files changed (checksum mismatch) is always a failure.
-    engine = os.environ.get("OCR_ENGINE", "auto")
+    engine = config.ocr_engine()
     warnings: list[str] = []
     if engine in ("auto", "paddle-ocr"):
         for p in _model_problems():
             (warnings if engine == "auto" and p.endswith("is missing") else problems).append(p)
     if problems:
         raise HTTPException(503, {"code": "not_ready", "message": "; ".join(problems)})
+    # The service cannot see whether its volumes are encrypted. The operator confirms it; until then every readiness answer
+    # carries the reminder (identity documents and results are written to these places in plain form).
+    # With DATA_KEY_FILE the service encrypts what it stores itself (app/crypto.py) and no reminder is needed.
+    if (training.enabled or config.job_db_path() or config.database_url()) and not (crypto.enabled() or config.storage_encrypted()):
+        warnings.append("stored personal data is not encrypted: set DATA_KEY_FILE so the service encrypts it, or put the job "
+                        "database and the training store on encrypted volumes and set DATA_AT_REST_ENCRYPTED=1")
     out = {"status": "ready", "authEnabled": security.auth_enabled()}
     if warnings:
         out["warnings"] = warnings
@@ -200,7 +226,11 @@ def mrz_parse(body: MrzParseRequest, request: Request, owner: str = Depends(secu
 
 
 def _process(job_id: str, images: list[bytes], hint: str | None, applicant: Applicant) -> None:
-    worker.process_job(store, job_id, images, hint, applicant, lambda: get_engine())   # looked up per call (tests patch it)
+    try:
+        worker.process_job(store, job_id, images, hint, applicant, lambda: get_engine())   # looked up per call (tests patch it)
+    finally:
+        with _inflight_lock:
+            _inflight.discard(job_id)
 
 
 @app.post("/v1/documents/extract", status_code=202)
@@ -244,8 +274,12 @@ async def extract(
         if getattr(store, "queue", False):
             store.submit(job.id, images, doc_type_hint, worker.applicant_dict(applicant))
         else:
+            with _inflight_lock:
+                _inflight.add(job.id)
             _ocr_pool.submit(_process, job.id, images, doc_type_hint, applicant)
     except BaseException:
+        with _inflight_lock:
+            _inflight.discard(job.id)
         store.discard(job.id)                      # give the slot back; nothing was queued
         if training.enabled:
             training.remove(job.id)
@@ -304,19 +338,32 @@ def add_correction(job_id: str, body: CorrectionRequest, owner: str = Depends(se
     if not job.consent_training:
         raise HTTPException(409, {"code": "no_training_consent",
                                   "message": "The applicant did not consent to training use for this job"})
+    # Nothing here is trusted yet. The correction is stored as "pending" with the key that sent it; it becomes training data
+    # only after a second person approves it on the server (tools/approve_corrections.py). What the reader produced is kept
+    # beside it: which fields the reviewer changed, and how confident the reading was, are what the confidence thresholds
+    # are later checked against (tools/calibration_report.py).
+    before = (job.result or {}).get("document") or {}
+    changed = sorted(k for k, v in body.document.items() if str(before.get(k, "") or "") != v)
+    ocr = {"engine": (job.result or {}).get("engine"), "needsReview": (job.result or {}).get("needsReview"),
+           "confidence": ((job.result or {}).get("confidence") or {}).get("mrz"), "fieldsChanged": changed,
+           "fieldsChecked": sorted(body.document)}
     try:
-        training.save_correction(job_id, body.model_dump())
+        training.save_correction(job_id, {**body.model_dump(), "submittedBy": owner, "ocr": ocr})
     except FileNotFoundError:                      # purged since the upload (retention, or consent withdrawn)
         raise HTTPException(409, {"code": "no_training_consent",
                                   "message": "Training data for this job was removed"}) from None
-    return {"stored": True, "lines": len(body.lines)}
+    return {"stored": True, "status": "pending", "lines": len(body.lines)}
 
 
 @app.get("/v1/models")
 def list_models(owner: str = Depends(security.authenticate)) -> dict:
     registry = Registry()
-    return {"models": [
-        {"id": m.id, "task": m.task, "lang": m.lang, "version": m.version, "active": m.active,
-         "status": registry.status(m), "metrics": m.metrics}
-        for m in registry.models()
-    ]}
+    try:
+        # fresh=False: a model folder is hashed again only when one of its files changed size or time, so asking often is cheap
+        return {"models": [
+            {"id": m.id, "task": m.task, "lang": m.lang, "version": m.version, "active": m.active,
+             "status": registry.status(m, fresh=False), "metrics": m.metrics, "replaced": m.replaced}
+            for m in registry.models()
+        ]}
+    except ManifestError as exc:
+        raise HTTPException(503, {"code": "manifest_refused", "message": str(exc)}) from None

@@ -37,7 +37,7 @@ def job_db_path() -> str: return os.environ.get("JOB_DB_PATH", "")          # em
 def max_pending_jobs() -> int: return _int("MAX_PENDING_JOBS", 32)
 def rate_limit_per_minute() -> int: return _int("RATE_LIMIT_PER_MIN", 60)   # 0 disables
 def trust_proxy() -> bool: return _flag("TRUST_PROXY")
-def ocr_concurrency() -> int: return max(1, _int("OCR_CONCURRENCY", 1))     # PaddleOCR predictors are not thread-safe
+def ocr_concurrency() -> int: return 1    # kept for callers; PaddleOCR reads one document at a time (predictors are not thread-safe)
 def include_text_lines() -> bool: return _flag("INCLUDE_TEXT_LINES")        # raw OCR text is personal data: off by default
 
 # review policy
@@ -55,6 +55,22 @@ def job_threads() -> int:                                                   # in
     return max(1, _int("JOB_THREADS", max(1, (os.cpu_count() or 2) // 2)))
 def text_read_seconds() -> float: return max(1.0, _float("OCR_TEXT_SECONDS", 20.0))   # ID-card text reader budget with no deadline
 def max_text_lines() -> int: return max(20, _int("MAX_TEXT_LINES", 250))    # OCR lines parsed per card job
+def job_max_seconds() -> int: return max(30, _int("JOB_MAX_SECONDS", 600))  # a job still running after this is marked failed
+def rapidocr_sessions() -> int:                                             # RapidOCR readers that can work at the same time
+    return max(1, _int("RAPIDOCR_SESSIONS", min(2, job_threads())))
+def search_seconds() -> float: return max(0.3, _float("OCR_SEARCH_SECONDS", 8.0))             # Tesseract MRZ search, per image
+def second_reader_seconds() -> float: return max(0.3, _float("OCR_SECOND_READER_SECONDS", 1.5))   # RapidOCR, once a reading is in hand
+def agreement_confidence() -> float: return _float("AGREEMENT_CONFIDENCE", 0.99)             # two readers agree, all checks pass
+def api_docs() -> bool: return _flag("API_DOCS")
+def training_store_dir() -> str: return os.environ.get("TRAINING_STORE_DIR", "")
+def storage_encrypted() -> bool: return _flag("DATA_AT_REST_ENCRYPTED")     # operator confirms the data volumes are encrypted
+def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION")   # find text once, read it per language
+def ocr_engine() -> str: return os.environ.get("OCR_ENGINE", "auto")
+def ocr_langs() -> list[str]: return [x.strip() for x in os.environ.get("OCR_LANGS", "en,ar").split(",") if x.strip()]
+def tesseract_text_langs() -> str: return os.environ.get("TESSERACT_TEXT_LANGS", "ara+eng")
+def id_labels_file() -> str: return os.environ.get("ID_LABELS_FILE", "")
+def tesseract_lang() -> str: return os.environ.get("TESSERACT_LANG", "").strip()
+def tesseract_data_dir() -> str: return os.environ.get("TESSERACT_DATA_DIR", "").strip()
 
 
 def ocr_deadline() -> float:

@@ -1,6 +1,10 @@
 # Build on a connected host, push to the internal registry, run air-gapped. NOT yet built or tested
 # (no Docker daemon was available during development): build it and run tools/load_test.py before relying on it.
-FROM python:3.12-slim
+# Pin the base image by digest for a build that can be repeated exactly:
+#   docker pull python:3.12-slim && docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
+#   docker build --build-arg BASE_IMAGE=python@sha256:<digest> ...
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng openssl libgl1 libglib2.0-0 libgomp1 \
@@ -10,10 +14,14 @@ RUN apt-get update \
 # several times smaller:   docker build --build-arg VARIANT=lite -t visa-ocr:lite .
 ARG VARIANT=full
 WORKDIR /srv
-COPY requirements.txt requirements-lite.txt ./
-RUN if [ "$VARIANT" = "lite" ]; then REQ=requirements-lite.txt; else REQ=requirements.txt; fi \
-    && pip install --no-cache-dir --no-compile -r "$REQ" \
-    && rm -f requirements.txt requirements-lite.txt
+# LOCKED=1 (default) installs from the .lock file: every package, direct and indirect, must match its recorded SHA-256, so a
+# changed or swapped package stops the build. LOCKED=0 installs from the plain pinned list (use it only to regenerate a lock).
+ARG LOCKED=1
+COPY requirements.txt requirements-lite.txt requirements.lock requirements-lite.lock ./
+RUN if [ "$VARIANT" = "lite" ]; then REQ=requirements-lite; else REQ=requirements; fi \
+    && if [ "$LOCKED" = "1" ]; then pip install --no-cache-dir --no-compile --require-hashes -r "$REQ.lock"; \
+       else pip install --no-cache-dir --no-compile -r "$REQ.txt"; fi \
+    && rm -f requirements*.txt requirements*.lock
 
 COPY app ./app
 COPY config ./config

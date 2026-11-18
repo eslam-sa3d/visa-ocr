@@ -40,7 +40,7 @@ Start only when you have real labelled lines (aim for 5,000). Fine-tuning on syn
    Use a real OCR-B font if you can obtain one; the MRZ of every passport is printed in OCR-B. Arabic lines: `training/synth_lines.py`.
 4. **Dataset.** `python training/prepare_dataset.py --store-dir <TRAINING_STORE_DIR> --ppocrlabel-dir <exports> --synth-dir data/synth_mrz data/synth_ar --dict <model dictionary> --out data/rec`
    It splits by document, caps synthetic lines at 3x the real ones, and keeps real validation lines separate (`val_real.txt`).
-5. **Baseline first.** Predict and evaluate the CURRENT model on `val_real.txt`:
+5. **Baseline first.** Predict and evaluate the CURRENT model on the golden set (`golden/labels.txt`: lines you keep apart and never train on; `val_real.txt` picks the checkpoint during training, so it must not judge the result). The commands below show `val_real.txt` only for a first trial with no golden set yet:
    `python training/predict_lines.py --labels data/rec/val_real.txt --image-dir data/rec --model-name <arch> --model-dir models/<current> --out base_preds.txt`
    `python training/evaluate.py --labels data/rec/val_real.txt --predictions base_preds.txt --out baseline.json`
    `python training/register_model.py --set-metrics <current id> --metrics baseline.json`
