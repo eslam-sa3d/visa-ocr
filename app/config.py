@@ -64,7 +64,7 @@ def agreement_confidence() -> float: return _float("AGREEMENT_CONFIDENCE", 0.99)
 def api_docs() -> bool: return _flag("API_DOCS")
 def training_store_dir() -> str: return os.environ.get("TRAINING_STORE_DIR", "")
 def storage_encrypted() -> bool: return _flag("DATA_AT_REST_ENCRYPTED")     # operator confirms the data volumes are encrypted
-def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION")   # find text once, read it per language
+def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION", True)   # find text once, read it per language; 0 = one pipeline per language
 def ocr_engine() -> str: return os.environ.get("OCR_ENGINE", "auto")
 def ocr_langs() -> list[str]: return [x.strip() for x in os.environ.get("OCR_LANGS", "en,ar").split(",") if x.strip()]
 def tesseract_text_langs() -> str: return os.environ.get("TESSERACT_TEXT_LANGS", "ara+eng")

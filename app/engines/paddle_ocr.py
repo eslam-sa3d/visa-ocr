@@ -49,6 +49,12 @@ def _mrz_score(found, texts, scores) -> float | None:
     return lines_confidence(found, [str(t) for t in texts], list(scores))
 
 
+# The text-detection settings of the PaddleX OCR pipeline (configs/pipelines/OCR.yaml in PaddleX 3.7). A stand-alone detector has
+# other defaults; with these the shared path finds the same boxes as the usual one.
+PIPELINE_DETECTION = {"limit_side_len": 64, "limit_type": "min", "thresh": 0.3, "box_thresh": 0.6,
+                      "unclip_ratio": 1.5}
+
+
 class SharedReader:
     """One text detector and one recogniser per language: the text boxes are found once and each recogniser reads the same
     crops. The usual pipeline (one PaddleOCR object per language) finds the boxes again for every language, which is most
@@ -186,10 +192,13 @@ class PaddleOcrEngine:
         det = self._checked("text_detection", "any")
         used: dict[str, dict] = {}
         recs = {}
-        detector = TextDetection(model_name=det.architecture(), model_dir=str(self.registry.full_path(det)))
+        # enable_mkldnn=False as in the usual path: oneDNN fails on some x86 CPU builds (seen with these very models)
+        detector = TextDetection(model_name=det.architecture(), model_dir=str(self.registry.full_path(det)), enable_mkldnn=False,
+                                 **PIPELINE_DETECTION)
         for lang in self.langs:
             rec = self._checked("text_recognition", lang)
-            recs[lang] = TextRecognition(model_name=rec.architecture(), model_dir=str(self.registry.full_path(rec)))
+            recs[lang] = TextRecognition(model_name=rec.architecture(), model_dir=str(self.registry.full_path(rec)),
+                                         enable_mkldnn=False)
             used[lang] = {"id": rec.id, "version": rec.version, "detector": det.id}
         return SharedReader(detector, recs, CropByPolys(det_box_type="quad"), SortQuadBoxes()), used
 

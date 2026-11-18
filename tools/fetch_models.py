@@ -35,7 +35,7 @@ def main() -> None:
         dst = ROOT / "models" / name
         if dst.exists():
             shutil.rmtree(dst)
-        shutil.copytree(src, dst)
+        shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".cache", ".DS_Store"))   # the model files only, not the download cache
         for m in manifest["models"]:
             if m["id"] == name:
                 m["sha256"] = dir_sha256(dst)
