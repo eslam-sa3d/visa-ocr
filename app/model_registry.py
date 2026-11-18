@@ -48,10 +48,18 @@ def _signature(models: list[dict], key: bytes) -> str:
     return hmac.new(key, canonical, hashlib.sha256).hexdigest()
 
 
+_DESKTOP_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}      # written by file managers when a folder is opened; not model files
+
+
+def _model_files(path: Path) -> list[Path]:
+    return sorted(p for p in Path(path).rglob("*") if p.is_file() and p.name not in _DESKTOP_FILES)
+
+
 def dir_sha256(path: Path) -> str:
-    """Hash of a model directory: file names and contents, in sorted order."""
+    """Hash of a model directory: file names and contents, in sorted order. Files a desktop file manager drops into a folder
+    (.DS_Store and the like) are left out, so looking at a model folder in Finder does not make it fail its checksum."""
     h = hashlib.sha256()
-    for f in sorted(p for p in Path(path).rglob("*") if p.is_file()):
+    for f in _model_files(path):
         h.update(str(f.relative_to(path)).encode())
         with open(f, "rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -62,7 +70,7 @@ def dir_sha256(path: Path) -> str:
 def _dir_stamp(path: Path) -> tuple:
     """Names, sizes and modification times of a model directory: cheap to take, changes when a file is replaced."""
     out = []
-    for f in sorted(p for p in Path(path).rglob("*") if p.is_file()):
+    for f in _model_files(path):
         st = f.stat()
         out.append((str(f.relative_to(path)), st.st_size, st.st_mtime_ns))
     return tuple(out)

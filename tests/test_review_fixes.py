@@ -888,7 +888,7 @@ def test_shared_detection_finds_text_once_and_reads_it_per_language(tmp_path, mo
     assert len(out.fields["textLines"]) == 3                               # one reading kept per box
     assert {ln["text"] for ln in out.fields["textLines"]} >= set(MRZ)
 
-    monkeypatch.delenv("PADDLE_SHARED_DETECTION")                          # off by default: the usual pipeline, same answer
+    monkeypatch.setenv("PADDLE_SHARED_DETECTION", "0")                     # switched off: the usual pipeline, same answer
     usual = PaddleOcrEngine(registry=reg, langs=["en", "ar"]).extract([png_bytes()], "passport")
     assert usual.mrz_lines == out.mrz_lines and usual.fields["models"] == out.fields["models"]
 
@@ -915,3 +915,12 @@ def test_shared_detection_refuses_unverified_models_and_follows_a_model_switch(t
     assert engine.extract([png_bytes()], "passport").fields["models"]["ar"]["id"] == "rec_ar" and not engine._shared_off
     _add_model(reg, "rec_new")
     assert engine.extract([png_bytes()], "passport").fields["models"]["ar"]["id"] == "rec_new"
+
+
+def test_a_file_manager_looking_at_a_model_folder_does_not_break_its_checksum(tmp_path):
+    reg = registry_with_models(tmp_path)
+    m = reg.models()[0]
+    (reg.full_path(m) / ".DS_Store").write_bytes(b"finder was here")
+    assert reg.status(m) == "verified"
+    (reg.full_path(m) / "extra.bin").write_bytes(b"a real change")
+    assert reg.status(m) == "mismatch"
