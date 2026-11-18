@@ -1,27 +1,80 @@
-"""API-key authentication, rate limiting and security headers.
+"""API-key authentication, roles, rate limiting and security headers.
 
 Set API_KEYS (comma-separated secrets) or API_KEY_SHA256 (comma-separated SHA-256 hex digests) to require a key
 in the X-API-Key header (or 'Authorization: Bearer <key>'). With neither set, authentication is OFF: development only.
 Rate limiting is per key (or per client address) and per process; put a gateway in front for a global limit.
+
+Roles (least privilege, NCA ECC 2-2-3-3). Keys given in API_KEYS / API_KEY_SHA256 have the role "full": every action, on
+their own jobs. For separate duties list the keys in a JSON file and set API_KEYS_FILE to it:
+
+    [{"name": "portal",    "sha256": "<hex digest of the key>", "role": "uploader", "expires": "2027-06-30"},
+     {"name": "review-ui", "sha256": "<hex digest>",            "role": "reviewer"},
+     {"name": "ops",       "sha256": "<hex digest>",            "role": "admin", "expires": "2027-01-31"}]
+
+    uploader   upload documents, read its own jobs, parse MRZ text
+    reviewer   read any job and submit corrections (it cannot upload)
+    admin      list models and their status, read any job
+    full       everything above on its own jobs (the single-key set-up)
+
+A key past its "expires" date (inclusive, UTC) is refused. Make a digest with:  printf %s "$KEY" | sha256sum
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import threading
 import time
+from datetime import date, datetime, timezone
 from collections import defaultdict, deque
 
 from fastapi import HTTPException, Request
 
-from . import config
+from . import audit, config
 
 _CID = re.compile(r"[A-Za-z0-9._\-]{1,64}")
 
 
-def _digests() -> list[str]:
+PERMISSIONS = {
+    "uploader": {"upload", "read", "parse"},
+    "reviewer": {"read", "read_any", "correct", "parse"},
+    "admin": {"read", "read_any", "models"},
+    "full": {"upload", "read", "parse", "correct", "models"},
+}
+_file_cache: tuple[str, float, list[dict]] | None = None
+
+
+def _file_keys() -> list[dict]:
+    """Keys with a role and an optional expiry date from API_KEYS_FILE. A file that is set but unusable stops the service:
+    falling back to "no keys" would turn authentication off."""
+    global _file_cache
+    path = os.environ.get("API_KEYS_FILE", "").strip()
+    if not path:
+        return []
+    try:
+        mtime = os.stat(path).st_mtime
+        if _file_cache and _file_cache[0] == path and _file_cache[1] == mtime:
+            return _file_cache[2]
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        keys = []
+        for item in raw:
+            digest, role = str(item["sha256"]).strip().lower(), str(item.get("role", "")).strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest) or role not in PERMISSIONS:
+                raise ValueError("each entry needs a 64-character sha256 and a role of " + ", ".join(sorted(PERMISSIONS)))
+            expires = date.fromisoformat(item["expires"]) if item.get("expires") else None
+            keys.append({"digest": digest, "role": role, "expires": expires, "name": str(item.get("name", ""))[:64]})
+        if not keys:
+            raise ValueError("no keys listed")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"API_KEYS_FILE cannot be used: {type(exc).__name__}: {exc}") from exc
+    _file_cache = (path, mtime, keys)
+    return keys
+
+
+def _keys() -> list[dict]:
     raw_keys, raw_hashes = os.environ.get("API_KEYS", ""), os.environ.get("API_KEY_SHA256", "")
     out = [hashlib.sha256(k.strip().encode()).hexdigest() for k in raw_keys.split(",") if k.strip()]
     out += [h.strip().lower() for h in raw_hashes.split(",") if h.strip()]
@@ -29,7 +82,11 @@ def _digests() -> list[str]:
         # A key variable is set but holds no usable key (for example "," from two empty variables). Fail closed:
         # treating this as "no key configured" would silently turn authentication off.
         raise RuntimeError("API_KEYS / API_KEY_SHA256 is set but contains no usable key")
-    return out
+    return [{"digest": d, "role": "full", "expires": None, "name": ""} for d in out] + _file_keys()
+
+
+def _digests() -> list[str]:
+    return [k["digest"] for k in _keys()]
 
 
 def weak_plain_keys() -> int:
@@ -43,21 +100,50 @@ def auth_enabled() -> bool:
 
 def authenticate(request: Request) -> str:
     """FastAPI dependency: returns the caller's owner id (a short hash of the key) or raises 401."""
-    digests = _digests()
-    if not digests:
+    keys = _keys()
+    request.state.role = "full"
+    if not keys:
         return "anonymous"
     key = request.headers.get("X-API-Key", "")
     auth = request.headers.get("Authorization", "")
     if not key and auth.lower().startswith("bearer "):
         key = auth[7:].strip()
     given = hashlib.sha256(key.encode()).hexdigest()
-    for d in digests:
-        if hmac.compare_digest(given, d):
-            return given[:16]
+    match = None
+    for k in keys:                                   # every entry is compared, so timing does not reveal which one matched
+        if hmac.compare_digest(given, k["digest"]):
+            match = match or k
+    path = request.url.path
+    if match is not None:
+        if match["expires"] is not None and datetime.now(timezone.utc).date() > match["expires"]:
+            audit.event("auth_key_expired", key=given[:16], key_name=match["name"], client=client_id(request, "anonymous"), path=path)
+            raise HTTPException(401, {"code": "key_expired", "message": "This API key has expired"},
+                                headers={"WWW-Authenticate": "ApiKey"})
+        request.state.role = match["role"]
+        return given[:16]
     # Throttle wrong keys per client address so a key cannot be guessed at full speed
-    limiter.check("badkey:" + client_id(request, "anonymous"), limit=config.bad_key_limit_per_minute())
+    client = client_id(request, "anonymous")
+    try:
+        limiter.check("badkey:" + client, limit=config.bad_key_limit_per_minute())
+    except HTTPException:
+        audit.event("auth_throttled", client=client, path=path)
+        raise
+    audit.event("auth_failed", client=client, path=path, key_sent=bool(key))
     raise HTTPException(401, {"code": "unauthorized", "message": "A valid API key is required"},
                         headers={"WWW-Authenticate": "ApiKey"})
+
+
+def allow(request: Request, permission: str, owner: str = "") -> str:
+    """Refuse (403) unless the caller's role includes `permission`. Returns the role."""
+    role = getattr(request.state, "role", "full")
+    if permission not in PERMISSIONS.get(role, ()):
+        audit.event("forbidden", key=owner, role=role, permission=permission, path=request.url.path)
+        raise HTTPException(403, {"code": "forbidden", "message": f"This API key's role ({role}) does not allow this action"})
+    return role
+
+
+def may_read_any(request: Request) -> bool:
+    return "read_any" in PERMISSIONS.get(getattr(request.state, "role", "full"), ())
 
 
 class RateLimiter:

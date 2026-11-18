@@ -64,6 +64,10 @@ def agreement_confidence() -> float: return _float("AGREEMENT_CONFIDENCE", 0.99)
 def api_docs() -> bool: return _flag("API_DOCS")
 def training_store_dir() -> str: return os.environ.get("TRAINING_STORE_DIR", "")
 def storage_encrypted() -> bool: return _flag("DATA_AT_REST_ENCRYPTED")     # operator confirms the data volumes are encrypted
+def production() -> bool: return _flag("PRODUCTION")                         # refuse to start in any unsafe set-up (see main.py)
+def ui_enabled() -> bool: return _flag("UI_ENABLED", not production())      # the built-in test page; off in production
+def upload_scan_command() -> str: return os.environ.get("UPLOAD_SCAN_COMMAND", "").strip()   # e.g. "clamdscan --no-summary"
+def upload_scan_seconds() -> float: return max(1.0, _float("UPLOAD_SCAN_SECONDS", 20.0))
 def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION", True)   # find text once, read it per language; 0 = one pipeline per language
 def ocr_engine() -> str: return os.environ.get("OCR_ENGINE", "auto")
 def ocr_langs() -> list[str]: return [x.strip() for x in os.environ.get("OCR_LANGS", "en,ar").split(",") if x.strip()]

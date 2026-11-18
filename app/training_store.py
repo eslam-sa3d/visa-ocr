@@ -134,6 +134,8 @@ class TrainingStore:
         tmp.write_text(crypto.seal_text(json.dumps(rec, indent=2, ensure_ascii=False)), encoding="utf-8")
         tmp.chmod(0o600)
         os.replace(tmp, path)
+        from . import audit  # noqa: WPS433
+        audit.event("correction_decided", job=job_id, decision=rec["status"], lines=len(rec.get("lines") or []))
         return path
 
     def remove(self, job_id: str, tombstone: bool = False) -> bool:
@@ -148,6 +150,8 @@ class TrainingStore:
         d = self.root / "jobs" / job_id
         if d.is_dir():
             shutil.rmtree(d, ignore_errors=True)
+            from . import audit  # noqa: WPS433
+            audit.event("training_data_removed", job=job_id, consent_withdrawn=bool(tombstone))
             return True
         return False
 

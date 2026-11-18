@@ -1,0 +1,553 @@
+{
+ "generatedAt": "2026-11-18T13:31:05+00:00",
+ "lockFile": "requirements.lock",
+ "python": "3.13.18",
+ "packages": [
+  {
+   "name": "aiohappyeyeballs",
+   "version": "2.7.1",
+   "hashes": 2,
+   "licence": "PSF-2.0"
+  },
+  {
+   "name": "aiohttp",
+   "version": "3.14.5",
+   "hashes": 161,
+   "licence": "Apache-2.0 AND MIT"
+  },
+  {
+   "name": "aiosignal",
+   "version": "1.4.0",
+   "hashes": 2,
+   "licence": "Apache 2.0"
+  },
+  {
+   "name": "aistudio-sdk",
+   "version": "0.3.9",
+   "hashes": 1,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "annotated-doc",
+   "version": "0.0.6",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "annotated-types",
+   "version": "0.8.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "anyio",
+   "version": "4.16.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "attrs",
+   "version": "26.1.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "bce-python-sdk",
+   "version": "0.9.79",
+   "hashes": 2,
+   "licence": "Apache License 2.0"
+  },
+  {
+   "name": "certifi",
+   "version": "2026.10.23",
+   "hashes": 2,
+   "licence": "MPL-2.0"
+  },
+  {
+   "name": "cffi",
+   "version": "2.1.1",
+   "hashes": 100,
+   "licence": "MIT-0"
+  },
+  {
+   "name": "chardet",
+   "version": "7.7.0",
+   "hashes": 46,
+   "licence": "0BSD"
+  },
+  {
+   "name": "charset-normalizer",
+   "version": "3.5.2",
+   "hashes": 172,
+   "licence": "MIT"
+  },
+  {
+   "name": "click",
+   "version": "8.5.1",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "colorlog",
+   "version": "6.12.0",
+   "hashes": 2,
+   "licence": "MIT License"
+  },
+  {
+   "name": "crc32c",
+   "version": "2.9.post0",
+   "hashes": 114,
+   "licence": "LGPL-2.1-or-later"
+  },
+  {
+   "name": "cryptography",
+   "version": "50.0.1",
+   "hashes": 46,
+   "licence": "Apache-2.0 OR BSD-3-Clause"
+  },
+  {
+   "name": "fastapi",
+   "version": "0.162.2",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "filelock",
+   "version": "4.2.12",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "flatbuffers",
+   "version": "25.12.19",
+   "hashes": 1,
+   "licence": "Apache 2.0"
+  },
+  {
+   "name": "frozenlist",
+   "version": "1.8.0",
+   "hashes": 130,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "fsspec",
+   "version": "2026.9.0",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "future",
+   "version": "1.0.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "h11",
+   "version": "0.16.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "hf-xet",
+   "version": "1.8.0",
+   "hashes": 17,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "httpcore",
+   "version": "1.0.9",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "httpcore2",
+   "version": "2.16.2",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "httptools",
+   "version": "0.9.0",
+   "hashes": 118,
+   "licence": "not installed here"
+  },
+  {
+   "name": "httpx",
+   "version": "0.28.1",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "httpx2",
+   "version": "2.16.2",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "huggingface-hub",
+   "version": "2.4.0",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "idna",
+   "version": "3.20",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "imagesize",
+   "version": "2.0.1",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "modelscope",
+   "version": "1.40.3",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "modelscope-hub",
+   "version": "0.7.1",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "multidict",
+   "version": "7.2.1",
+   "hashes": 151,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "networkx",
+   "version": "3.7",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "numpy",
+   "version": "2.3.5",
+   "hashes": 74,
+   "licence": "Copyright (c) 2005-2025, NumPy Developers."
+  },
+  {
+   "name": "onnxruntime",
+   "version": "1.29.0",
+   "hashes": 24,
+   "licence": "MIT License"
+  },
+  {
+   "name": "opencv-contrib-python",
+   "version": "4.10.0.84",
+   "hashes": 7,
+   "licence": "Apache 2.0"
+  },
+  {
+   "name": "opencv-contrib-python-headless",
+   "version": "4.10.0.84",
+   "hashes": 7,
+   "licence": "Apache 2.0"
+  },
+  {
+   "name": "opencv-python",
+   "version": "5.1.0.95",
+   "hashes": 10,
+   "licence": "Apache 2.0"
+  },
+  {
+   "name": "opentelemetry-api",
+   "version": "1.45.2",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "opt-einsum",
+   "version": "3.3.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "packaging",
+   "version": "26.3",
+   "hashes": 2,
+   "licence": "Apache-2.0 OR BSD-2-Clause"
+  },
+  {
+   "name": "paddleocr",
+   "version": "3.7.0",
+   "hashes": 2,
+   "licence": "Apache License 2.0"
+  },
+  {
+   "name": "paddlepaddle",
+   "version": "3.3.1",
+   "hashes": 15,
+   "licence": "Apache Software License"
+  },
+  {
+   "name": "paddlex",
+   "version": "3.7.2",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "pandas",
+   "version": "3.1.1",
+   "hashes": 58,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "pillow",
+   "version": "13.0.0",
+   "hashes": 83,
+   "licence": "MIT-CMU"
+  },
+  {
+   "name": "prettytable",
+   "version": "3.19.0",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "propcache",
+   "version": "0.5.4",
+   "hashes": 138,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "protobuf",
+   "version": "7.36.2",
+   "hashes": 8,
+   "licence": "3-Clause BSD License"
+  },
+  {
+   "name": "psutil",
+   "version": "7.2.2",
+   "hashes": 21,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "psycopg",
+   "version": "3.3.8",
+   "hashes": 2,
+   "licence": "LGPL-3.0-only"
+  },
+  {
+   "name": "psycopg-binary",
+   "version": "3.3.8",
+   "hashes": 66,
+   "licence": "LGPL-3.0-only"
+  },
+  {
+   "name": "py-cpuinfo",
+   "version": "9.0.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "pyclipper",
+   "version": "1.4.0",
+   "hashes": 36,
+   "licence": "MIT"
+  },
+  {
+   "name": "pycparser",
+   "version": "3.12",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "pycryptodome",
+   "version": "4.5.0",
+   "hashes": 31,
+   "licence": "BSD-2-Clause AND Unlicense AND MIT"
+  },
+  {
+   "name": "pydantic",
+   "version": "2.14.3",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "pydantic-core",
+   "version": "2.50.4",
+   "hashes": 140,
+   "licence": "MIT"
+  },
+  {
+   "name": "pypdfium2",
+   "version": "5.15.2",
+   "hashes": 23,
+   "licence": "BSD-3-Clause, Apache-2.0, dependency licenses"
+  },
+  {
+   "name": "pytesseract",
+   "version": "0.3.13",
+   "hashes": 2,
+   "licence": "Apache License 2.0"
+  },
+  {
+   "name": "python-bidi",
+   "version": "0.6.12",
+   "hashes": 125,
+   "licence": "GNU Library or Lesser General Public License (LGPL)"
+  },
+  {
+   "name": "python-dateutil",
+   "version": "4.0.0",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "python-dotenv",
+   "version": "1.2.4",
+   "hashes": 2,
+   "licence": "not installed here"
+  },
+  {
+   "name": "python-multipart",
+   "version": "0.0.33",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "pyyaml",
+   "version": "6.0.2",
+   "hashes": 53,
+   "licence": "MIT"
+  },
+  {
+   "name": "rapidocr-onnxruntime",
+   "version": "1.2.3",
+   "hashes": 1,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "requests",
+   "version": "2.34.2",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "ruamel-yaml",
+   "version": "0.19.1",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "safetensors",
+   "version": "0.8.0",
+   "hashes": 17,
+   "licence": "Apache Software License"
+  },
+  {
+   "name": "shapely",
+   "version": "2.2.0",
+   "hashes": 64,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "six",
+   "version": "1.17.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "starlette",
+   "version": "1.10.0",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "tqdm",
+   "version": "4.70.1",
+   "hashes": 2,
+   "licence": "MPL-2.0 AND MIT"
+  },
+  {
+   "name": "truststore",
+   "version": "0.10.5",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "typing-extensions",
+   "version": "4.16.0",
+   "hashes": 2,
+   "licence": "PSF-2.0"
+  },
+  {
+   "name": "typing-inspection",
+   "version": "0.4.5",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "tzdata",
+   "version": "2026.6",
+   "hashes": 2,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "ujson",
+   "version": "6.1.0",
+   "hashes": 125,
+   "licence": "BSD-3-Clause AND TCL"
+  },
+  {
+   "name": "urllib3",
+   "version": "2.8.0",
+   "hashes": 2,
+   "licence": "MIT"
+  },
+  {
+   "name": "uvicorn",
+   "version": "0.54.0",
+   "hashes": 2,
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "uvloop",
+   "version": "0.23.0",
+   "hashes": 61,
+   "licence": "not installed here"
+  },
+  {
+   "name": "watchfiles",
+   "version": "1.3.0",
+   "hashes": 33,
+   "licence": "not installed here"
+  },
+  {
+   "name": "wcwidth",
+   "version": "0.9.4",
+   "hashes": 29,
+   "licence": "MIT License"
+  },
+  {
+   "name": "websockets",
+   "version": "17.4",
+   "hashes": 154,
+   "licence": "not installed here"
+  },
+  {
+   "name": "yarl",
+   "version": "1.25.1",
+   "hashes": 138,
+   "licence": "Apache-2.0"
+  },
+  {
+   "name": "setuptools",
+   "version": "84.2.1",
+   "hashes": 2,
+   "licence": "MIT"
+  }
+ ],
+ "unpinned": [],
+ "vulnerabilityCheck": {
+  "checkedAt": "2026-11-18T13:31:05+00:00",
+  "packagesChecked": 90,
+  "found": []
+ }
+}

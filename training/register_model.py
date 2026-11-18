@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app import audit  # noqa: E402
 from app.model_registry import ModelInfo, Registry, dir_sha256  # noqa: E402
 
 
@@ -66,6 +67,8 @@ def register(reg: Registry, info: ModelInfo, activate: bool, force: bool, replac
                     m.active = False
             info.active = True
         reg.save(models + [info])
+        audit.event("model_registered", model=info.id, task=info.task, lang=info.lang, active=info.active, replaced=info.replaced,
+                    forced=bool(force), sha256=info.sha256[:16])
         return info.sha256
 
 
@@ -87,6 +90,7 @@ def activate_existing(reg: Registry, model_id: str) -> tuple[str, str]:
                 previous, m.active = m.id, False
         target.active, target.replaced = True, previous
         reg.save(models)
+        audit.event("model_activated", model=target.id, task=target.task, lang=target.lang, replaced=previous)
         return target.id, previous
 
 
@@ -99,6 +103,7 @@ def rollback(reg: Registry, task: str, lang: str) -> tuple[str, str]:
         raise SystemExit(f"{current.id} did not replace another model: nothing to roll back to. "
                          "Use --activate-existing ID to choose one.")
     now, _ = activate_existing(reg, current.replaced)
+    audit.event("model_rolled_back", model=now, from_model=current.id, task=task, lang=lang)
     return now, current.id
 
 
