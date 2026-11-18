@@ -133,8 +133,9 @@ def functional(api: Api, a) -> None:
         r = api.get("/readyz", key=None)
         assert r.status_code == 200 and r.json()["status"] == "ready", r.text
         assert "endpoints" in api.get("/", key=None).json()
-        ui = api.get("/ui", key=None)
-        assert ui.status_code == 200 and "<html" in ui.text.lower()
+        ui = api.get("/ui", key=None)             # the test page is switched off in production: 404 there is correct
+        assert (ui.status_code == 200 and "<html" in ui.text.lower()) or ui.status_code == 404, ui.status_code
+        assert (ui.status_code == 200) == ("ui" in api.get("/", key=None).json())
         assert "models" in api.get("/v1/models").json()
 
     for fmt, label in (("TD3", "passport"), ("MRVA", "visa MRV-A"), ("MRVB", "visa MRV-B"), ("TD1", "ID card TD1"), ("TD2", "ID card TD2")):
@@ -334,8 +335,10 @@ def security_checks(api: Api, a) -> None:
             assert h.get("X-Content-Type-Options") == "nosniff" and h.get("X-Frame-Options") == "DENY" and h.get("Referrer-Policy") == "no-referrer", path
             if path.startswith("/v1"):
                 assert h.get("Cache-Control") == "no-store", path
-        csp = api.get("/ui").headers.get("Content-Security-Policy", "")
-        assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+        page = api.get("/ui")
+        if page.status_code == 200:                   # not served in production
+            csp = page.headers.get("Content-Security-Policy", "")
+            assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
         assert "access-control-allow-origin" not in {k.lower() for k in api.get("/v1/models", headers={"Origin": "https://evil.example"}).headers}
 
     @check(g, "oversized request body is refused with 413 (declared and streamed)")
