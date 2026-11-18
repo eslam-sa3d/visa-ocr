@@ -22,6 +22,26 @@ os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+
+def _writable_cache_home() -> None:
+    """PaddleX keeps a small cache under ~/.paddlex and fails to start when it cannot create it. A service account often has no
+    home folder (a container user made with --no-create-home), so in that case the cache goes to a private temporary folder.
+    Must run before PaddleX is imported. Nothing is downloaded into it: models come from MODELS_DIR only."""
+    if os.environ.get("PADDLE_PDX_CACHE_HOME"):
+        return
+    target = os.path.join(os.path.expanduser("~"), ".paddlex")
+    try:
+        os.makedirs(target, exist_ok=True)
+        if os.access(target, os.W_OK):
+            return
+    except OSError:
+        pass
+    import tempfile  # noqa: WPS433
+    os.environ["PADDLE_PDX_CACHE_HOME"] = tempfile.mkdtemp(prefix="visa-ocr-paddlex-")
+
+
+_writable_cache_home()
+
 from .. import config
 from ..mrz import find_mrz_lines, lines_confidence
 from ..uploads import upscaled_size

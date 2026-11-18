@@ -4,6 +4,8 @@
 set -eu
 umask 077        # files the service creates (database, TLS key, training data) are owner-only
 PORT="${PORT:-443}"
+# The service user has no home folder of its own; libraries that keep a small cache get one on the data volume.
+mkdir -p "${HOME:-/data/home}" 2>/dev/null || true
 # Same rule as app/security.py: a value made only of commas or spaces is not a key.
 KEYS_SET="$(printf '%s%s' "${API_KEYS:-}" "${API_KEY_SHA256:-}" | tr -d ', \t\r\n')"
 if [ -z "$KEYS_SET" ] && [ "${ALLOW_ANONYMOUS:-0}" != "1" ]; then

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Callable
+import logging
 import threading
 
 from .base import Engine, EngineOutput, EngineUnavailable
@@ -18,6 +19,7 @@ _REGISTRY: dict[str, Callable[[], Engine]] = {
     "auto": lambda: AutoEngine(),
     # "regula": RegulaEngine,        # on-prem Docker Web API adapter (after POC)
 }
+log = logging.getLogger("visa-ocr")
 _INSTANCES: dict[str, Engine] = {}
 _INSTANCES_LOCK = threading.Lock()
 
@@ -31,6 +33,12 @@ class AutoEngine:
         try:
             out = get_engine_by_name(PaddleOcrEngine.name).extract(images, doc_type_hint)
         except EngineUnavailable:
+            return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
+        except Exception as exc:  # noqa: BLE001
+            # PaddleOCR is installed and its models are in place, yet it failed (it could not start in this environment, or
+            # broke on this image). "auto" promises a reading whenever any reader can give one, so the other pair reads it,
+            # and the failure is logged so that it does not go unnoticed.
+            log.error("PaddleOCR failed (%s); this document is read by Tesseract + RapidOCR", type(exc).__name__)
             return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         # PaddleOCR reads whole pages. When it finds no MRZ on a document that should have one (a passport small inside a
         # full-page scan, a tilted or glary photo), the ensemble's strip search and rotation search often still succeeds.
