@@ -6,7 +6,8 @@
 set -eu
 IMAGE="${1:?image name}"; SAMPLE="${2:?a JPEG or PNG of a document}"
 NAME="visa-ocr-offline-smoke-$$"
-trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
+# On any failure the container's own output is printed first: it says why the service stopped.
+trap 'code=$?; if [ $code -ne 0 ]; then echo "--- container output ---"; docker logs "$NAME" 2>&1 | tail -40; echo "--- container state: $(docker inspect -f "{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}" "$NAME" 2>/dev/null) ---"; fi; docker rm -f "$NAME" >/dev/null 2>&1 || true; exit $code' EXIT
 docker run -d --name "$NAME" --network none -e ALLOW_ANONYMOUS=1 -v "$(cd "$(dirname "$SAMPLE")" && pwd)/$(basename "$SAMPLE"):/tmp/sample:ro" "$IMAGE" >/dev/null
 docker exec "$NAME" python - <<'PY'
 import json, ssl, time, urllib.request, uuid
