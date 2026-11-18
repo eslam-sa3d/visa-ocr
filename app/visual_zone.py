@@ -311,6 +311,208 @@ def _row_neighbours(label: dict, lines: list[dict]) -> list[dict]:
 
 
 
+class _Card:
+    """What has been read from one card so far."""
+    def __init__(self, lines: list[dict]) -> None:
+        self.lines = lines
+        self.doc: dict = {"kind": "gcc_id", "format": "visual"}
+        self.scores: dict[str, float] = {}
+        self.flags: list[Flag] = []
+        self.checks: dict[str, bool] = {}
+
+    def set(self, field: str, value, line: dict | None) -> None:
+        self.doc[field] = value
+        self.scores[field] = (line or {}).get("score", 1.0)
+
+
+def _saudi_number(c: _Card):
+    """The 10-digit Saudi number: by its label first, otherwise any such number not on another field's line. Returns
+    (number or None, the labelled value found, was a digit rebuilt, was it taken without a label)."""
+    found = _find_value("idNumber", c.lines)
+    if found:
+        m = _ID10.search(re.sub(r"[\s-]", "", to_ascii_digits(found[0])))
+        if m:
+            c.scores["idNumber"] = found[1].get("score", 1.0)
+            return m[1], found, False, False
+        fixed = _repair_one_unreadable_digit(found[0])
+        if fixed:
+            c.scores["idNumber"] = min(found[1].get("score", 1.0), 0.5)
+            return fixed, found, True, False
+    for ln in c.lines:
+        if _classify(ln["text"])[0] not in (None, "idNumber"):
+            continue                     # a number on another field's line (employer ID, a date) is not the holder's number
+        m = _ID10.search(re.sub(r"[\s-]", "", ln["_n"]))
+        if m:
+            c.scores["idNumber"] = ln.get("score", 1.0)
+            return m[1], found, False, True          # not next to an ID label: nothing says this is the holder's number
+    return None, found, False, False
+
+
+def _read_id_number(c: _Card) -> None:
+    """ID number, card kind and check digit, with a flag for every way the number can be less than certain."""
+    id_number, found, repaired, unlabelled = _saudi_number(c)
+    if id_number:
+        c.doc["idNumber"] = id_number
+        c.doc["kind"] = "iqama" if id_number[0] == "2" else "saudi_national_id"
+        c.checks["id_number"] = saudi_id_check(id_number)
+        if repaired:
+            # error, not a score cap: a rebuilt number must reach a person whatever the confidence threshold is
+            c.flags.append(Flag("id_number_repaired", "error",
+                                "One digit of the ID number was unreadable and was restored from the check digit. Confirm it against the card."))
+        if unlabelled:
+            c.flags.append(Flag("id_number_unlabelled", "error",
+                                "The ID number was not found next to an ID label; a 10-digit number from elsewhere on the card was used. "
+                                "Confirm it against the card."))
+        if not c.checks["id_number"]:
+            c.flags.append(Flag("id_number_checksum_failed", "error",
+                                "The ID number fails the check digit. A digit was probably misread."))
+        return
+    other = _find_other_gcc_number(c.lines, found)
+    if not other:
+        c.flags.append(Flag("id_number_not_found", "error", "No 10-digit ID number starting with 1 or 2 was found"))
+        return
+    digits, info, score = other
+    c.doc["idNumber"], c.doc["kind"], c.doc["issuingCountry"] = digits, info["kind"], info["country"]
+    c.scores["idNumber"] = score
+    c.checks["id_number"] = info["valid"]
+    if not info["valid"]:
+        c.flags.append(Flag("id_number_checksum_failed", "error",
+                            "The ID number fails its check digit. A digit was probably misread."))
+    c.flags.append(Flag("gcc_layout_unverified", "error",
+                        f"Recognised as {info['kind'].replace('_', ' ')} from the number format ({info['note']}). "
+                        "This card type has not been tested on real specimens, so a person must check every field."))
+    c.doc["_numberBirthDate"] = info["birthDate"]
+
+
+def _unlabelled_latin_name(c: _Card) -> dict | None:
+    """Cards often print the name with no label: take the longest run of capital-letter words (readers add stray marks around
+    it, "= MOHAMED ... BASYUNI pases i"). Returns the line it came from."""
+    for ln in c.lines:
+        t = ln["text"].strip()
+        if _is_label(ln) or _is_header_text(t):
+            continue
+        runs = re.findall(r"[A-Z][A-Z'\-]+(?: [A-Z][A-Z'\-]+)+", t)
+        if runs:
+            best = max(runs, key=len)
+            if len(best.split()) >= 2 and not _is_header_text(best):
+                c.set("nameEn", best, ln)
+                return ln
+    return None
+
+
+def _arabic_name_above(c: _Card, en_line: dict) -> None:
+    """The Arabic name is printed just above the Latin one: the nearest Arabic line of three or more words over it."""
+    eb = _bbox(en_line)
+    if eb is None:
+        return
+    ecy, eh = (eb[1] + eb[3]) / 2, eb[3] - eb[1]
+    above = []
+    for o in c.lines:
+        ob = _bbox(o)
+        if (not ob or o is en_line or _is_label(o) or not _ARABIC.search(o["text"]) or len(o["text"].split()) < 3
+                or _is_header_text(o["text"])):
+            continue
+        dy = ecy - (ob[1] + ob[3]) / 2           # centres, so tilt does not matter
+        overlaps_x = min(eb[2], ob[2]) - max(eb[0], ob[0]) > 0
+        if 0.2 * eh <= dy <= 2.2 * eh and overlaps_x:
+            above.append((dy, o))
+    if above:
+        o = min(above, key=lambda a: a[0])[1]
+        ar = re.sub(r"\s+", " ", re.sub(r"[A-Za-z0-9\"'=|_\\]+", " ", o["text"])).strip()    # drop Latin noise the reader added
+        c.set("nameAr", ar or o["text"].strip(), o)
+
+
+def _read_names(c: _Card) -> None:
+    """Arabic and Latin names, kept separately."""
+    name = _find_value("name", c.lines)
+    if name and _is_header_text(name[0]):
+        name = None
+    if name:
+        c.set("nameAr" if _ARABIC.search(name[0]) else "nameEn", name[0], name[1])
+    en_line = _unlabelled_latin_name(c) if "nameEn" not in c.doc else None
+    if "nameAr" not in c.doc and en_line is not None:
+        _arabic_name_above(c, en_line)
+
+
+def _nationality_value(c: _Card, f):
+    """The value must be a country. A neighbouring notice or a garbled box is not; look along the label's row."""
+    if f and _resolve_country(f[0]):
+        return f
+    for lab in [l for l in c.lines if _classify(l["text"])[0] == "nationality"]:
+        for o in _row_neighbours(lab, c.lines):
+            if not _is_label(o) and not _is_header_text(o["text"]) and _resolve_country(o["text"]):
+                return o["text"].strip(), o
+    return f if f and not _is_header_text(f[0]) else None
+
+
+def _read_labelled_fields(c: _Card) -> None:
+    for field in ("nationality", "occupation", "religion", "birthPlace", "issuePlace", "workPlace", "employer"):
+        f = _find_value(field, c.lines)
+        if field == "nationality":
+            f = _nationality_value(c, f)
+        if f:
+            value = f[0]
+            if field == "nationality" and ":" in value and _resolve_country(value):
+                value = value.rsplit(":", 1)[1].strip() or value        # keep the country, drop a label remnant
+            c.set(field, value, f[1])
+    f = _find_value("employerId", c.lines)
+    if f:
+        digits = re.sub(r"\D", "", to_ascii_digits(f[0]))
+        if digits:
+            c.set("employerId", digits, f[1])
+
+
+def _read_dates(c: _Card, auto_accept: bool) -> None:
+    """Birth and expiry dates, by label first."""
+    dates: dict[str, tuple[str, str]] = {}
+    for field in ("birthDate", "expiryDate"):
+        f = _find_value(field, c.lines)
+        if f:
+            parsed = parse_date(f[0])
+            if parsed:
+                dates[field], c.scores[field] = parsed, f[1].get("score", 1.0)
+    if "expiryDate" not in dates and "birthDate" in dates:
+        # The expiry label is often garbled by OCR ("تاريخ <ul 2028/01/30"). A second line that says "date" and has one date is
+        # taken as the expiry, but only as a guess: it always reaches a person.
+        for ln in c.lines:
+            if _classify(ln["text"])[0] is not None or not re.search(r"تاريخ|date", normalize_arabic(ln["text"]), re.I):
+                continue
+            parsed = parse_date(ln["text"])
+            if parsed and parsed != dates["birthDate"]:
+                dates["expiryDate"], c.scores["expiryDate"] = parsed, min(ln.get("score", 1.0), 0.5)
+                c.flags.append(Flag("expiry_label_guessed", "error",
+                                    "The expiry label could not be read; the date on the other 'date' line was used. Check it."))
+                break
+    for field, (iso, cal) in dates.items():
+        c.doc[field], c.doc[field.replace("Date", "Calendar")] = iso, cal
+    for field in ("birthDate", "expiryDate"):
+        if field not in c.doc:
+            # With auto-accept on, an unreadable expiry must still reach a person
+            sev = "error" if (auto_accept and field == "expiryDate") else "warning"
+            c.flags.append(Flag(f"{field}_not_found", sev, f"Could not read {field}"))
+
+
+def _check_dates(c: _Card, today: date, auto_accept: bool) -> None:
+    """Expired, born in the future, and the birth date some ID numbers carry inside them."""
+    doc = c.doc
+    if doc.get("expiryDate"):
+        if doc.get("expiryCalendar") == "gregorian":
+            if date.fromisoformat(doc["expiryDate"]) < today:
+                c.flags.append(Flag("document_expired", "error", "The document has expired"))
+        else:
+            c.flags.append(hijri_expiry_flag(doc, today, auto_accept))
+    if doc.get("birthDate") and doc.get("birthCalendar") == "gregorian" and date.fromisoformat(doc["birthDate"]) > today:
+        c.flags.append(Flag("birth_date_in_future", "error", "Date of birth is in the future"))
+    from_number = doc.pop("_numberBirthDate", None)
+    if from_number and doc.get("birthDate") and doc["birthDate"] != from_number and doc.get("birthCalendar") == "gregorian":
+        c.flags.append(Flag("birth_date_differs_from_id_number", "error",
+                            f"Birth date {doc['birthDate']} differs from the date inside the ID number ({from_number})."))
+    elif from_number and "birthDate" not in doc:
+        doc["birthDate"], doc["birthCalendar"] = from_number, "gregorian"
+        c.flags = [f for f in c.flags if f.code != "birthDate_not_found"]
+        c.flags.append(Flag("birth_date_from_id_number", "warning", "Birth date was taken from the ID number."))
+
+
 def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: bool | None = None,
                  min_confidence: float | None = None) -> dict:
     """Read an ID card with no MRZ. Results always need review unless auto_accept (VISUAL_ZONE_AUTO_ACCEPT) is on;
@@ -319,191 +521,28 @@ def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: 
     today = today or date.today()
     auto_accept = config.visual_zone_auto_accept() if auto_accept is None else auto_accept
     min_confidence = config.min_confidence_visual() if min_confidence is None else min_confidence
-    lines = _ordered([{**l, "text": str(l.get("text", "")), "_n": to_ascii_digits(str(l.get("text", "")))}
-                      for l in raw_lines if str(l.get("text", "")).strip()])
-    flags: list[Flag] = []
-    doc: dict = {"kind": "gcc_id", "format": "visual"}
-    scores: dict[str, float] = {}
+    c = _Card(_ordered([{**l, "text": str(l.get("text", "")), "_n": to_ascii_digits(str(l.get("text", "")))}
+                        for l in raw_lines if str(l.get("text", "")).strip()]))
+    _read_id_number(c)
+    _read_names(c)
+    _read_labelled_fields(c)
+    _read_dates(c, auto_accept)
+    _check_dates(c, today, auto_accept)
 
-    # ID number: labelled value first, otherwise any 10-digit number starting with 1 or 2
-    id_number = None
-    repaired_id = False
-    found = _find_value("idNumber", lines)
-    if found:
-        m = _ID10.search(re.sub(r"[\s-]", "", to_ascii_digits(found[0])))
-        if m:
-            id_number, scores["idNumber"] = m[1], found[1].get("score", 1.0)
-        else:
-            fixed = _repair_one_unreadable_digit(found[0])
-            if fixed:
-                id_number, scores["idNumber"] = fixed, min(found[1].get("score", 1.0), 0.5)
-                repaired_id = True
-    unlabelled_id = False
-    if id_number is None:
-        for ln in lines:
-            if _classify(ln["text"])[0] not in (None, "idNumber"):
-                continue                     # a number on another field's line (employer ID, a date) is not the holder's number
-            m = _ID10.search(re.sub(r"[\s-]", "", ln["_n"]))
-            if m:
-                id_number, scores["idNumber"] = m[1], ln.get("score", 1.0)
-                unlabelled_id = True         # not next to an ID label: nothing says this is the holder's number
-                break
-    checks: dict[str, bool] = {}
-    if id_number:
-        doc["idNumber"] = id_number
-        doc["kind"] = "iqama" if id_number[0] == "2" else "saudi_national_id"
-        checks["id_number"] = saudi_id_check(id_number)
-        if repaired_id:
-            # error, not a score cap: a rebuilt number must reach a person whatever the confidence threshold is
-            flags.append(Flag("id_number_repaired", "error",
-                              "One digit of the ID number was unreadable and was restored from the check digit. Confirm it against the card."))
-        if unlabelled_id:
-            flags.append(Flag("id_number_unlabelled", "error",
-                              "The ID number was not found next to an ID label; a 10-digit number from elsewhere on the card was used. "
-                              "Confirm it against the card."))
-        if not checks["id_number"]:
-            flags.append(Flag("id_number_checksum_failed", "error",
-                              "The ID number fails the check digit. A digit was probably misread."))
-    else:
-        other = _find_other_gcc_number(lines, found)
-        if other:
-            digits, info, score = other
-            id_number = digits
-            doc["idNumber"], doc["kind"], doc["issuingCountry"] = digits, info["kind"], info["country"]
-            scores["idNumber"] = score
-            checks["id_number"] = info["valid"]
-            if not info["valid"]:
-                flags.append(Flag("id_number_checksum_failed", "error",
-                                  "The ID number fails its check digit. A digit was probably misread."))
-            flags.append(Flag("gcc_layout_unverified", "error",
-                              f"Recognised as {info['kind'].replace('_', ' ')} from the number format ({info['note']}). "
-                              "This card type has not been tested on real specimens, so a person must check every field."))
-            doc["_numberBirthDate"] = info["birthDate"]
-        else:
-            flags.append(Flag("id_number_not_found", "error", "No 10-digit ID number starting with 1 or 2 was found"))
-
-    # names: keep Arabic and Latin separately. Cards often print them with no label.
-    name = _find_value("name", lines)
-    if name and _is_header_text(name[0]):
-        name = None
-    if name:
-        key = "nameAr" if _ARABIC.search(name[0]) else "nameEn"
-        doc[key], scores[key] = name[0], name[1].get("score", 1.0)
-    en_line = None
-    if "nameEn" not in doc:
-        for ln in lines:
-            t = ln["text"].strip()
-            if _is_label(ln) or _is_header_text(t):
-                continue
-            # the longest run of capital-letter words; readers add stray marks around it ("= MOHAMED ... BASYUNI pases i")
-            runs = re.findall(r"[A-Z][A-Z'\-]+(?: [A-Z][A-Z'\-]+)+", t)
-            if runs:
-                best = max(runs, key=len)
-                if len(best.split()) >= 2 and not _is_header_text(best):
-                    doc["nameEn"], scores["nameEn"], en_line = best, ln.get("score", 1.0), ln
-                    break
-    eb = _bbox(en_line) if en_line is not None else None
-    if "nameAr" not in doc and eb is not None:
-        ecy, eh = (eb[1] + eb[3]) / 2, eb[3] - eb[1]
-        above = []
-        for o in lines:
-            ob = _bbox(o)
-            if (not ob or o is en_line or _is_label(o) or not _ARABIC.search(o["text"]) or len(o["text"].split()) < 3
-                    or _is_header_text(o["text"])):
-                continue
-            dy = ecy - (ob[1] + ob[3]) / 2           # centres, so tilt does not matter
-            overlaps_x = min(eb[2], ob[2]) - max(eb[0], ob[0]) > 0
-            if 0.2 * eh <= dy <= 2.2 * eh and overlaps_x:
-                above.append((dy, o))
-        if above:
-            o = min(above, key=lambda a: a[0])[1]
-            ar = re.sub(r"\s+", " ", re.sub(r"[A-Za-z0-9\"'=|_\\]+", " ", o["text"])).strip()    # drop Latin noise the reader added
-            doc["nameAr"], scores["nameAr"] = ar or o["text"].strip(), o.get("score", 1.0)
-    for field in ("nationality", "occupation", "religion", "birthPlace", "issuePlace", "workPlace", "employer"):
-        f = _find_value(field, lines)
-        if field == "nationality":
-            # The value must be a country. A neighbouring notice or a garbled box ("يجب التحقق") is not; look along the same row.
-            if not f or not _resolve_country(f[0]):
-                alt = None
-                for lab in [l for l in lines if _classify(l["text"])[0] == "nationality"]:
-                    for o in _row_neighbours(lab, lines):
-                        if not _is_label(o) and not _is_header_text(o["text"]) and _resolve_country(o["text"]):
-                            alt = (o["text"].strip(), o)
-                            break
-                    if alt:
-                        break
-                f = alt or (f if f and not _is_header_text(f[0]) else None)
-        if f:
-            value = f[0]
-            if field == "nationality" and ":" in value and _resolve_country(value):
-                value = value.rsplit(":", 1)[1].strip() or value        # keep the country, drop a label remnant
-            doc[field], scores[field] = value, f[1].get("score", 1.0)
-    f = _find_value("employerId", lines)
-    if f:
-        digits = re.sub(r"\D", "", to_ascii_digits(f[0]))
-        if digits:
-            doc["employerId"], scores["employerId"] = digits, f[1].get("score", 1.0)
-
-    # dates, assigned by label first
-    dates: dict[str, tuple[str, str]] = {}
-    for field in ("birthDate", "expiryDate"):
-        f = _find_value(field, lines)
-        if f:
-            parsed = parse_date(f[0])
-            if parsed:
-                dates[field], scores[field] = parsed, f[1].get("score", 1.0)
-    if "expiryDate" not in dates and "birthDate" in dates:
-        # The expiry label is often garbled by OCR ("تاريخ <ul 2028/01/30"). A second line that says "date" and has one date is
-        # taken as the expiry, but only as a guess: it always reaches a person.
-        for ln in lines:
-            if _classify(ln["text"])[0] is not None or not re.search(r"تاريخ|date", normalize_arabic(ln["text"]), re.I):
-                continue
-            parsed = parse_date(ln["text"])
-            if parsed and parsed != dates["birthDate"]:
-                dates["expiryDate"], scores["expiryDate"] = parsed, min(ln.get("score", 1.0), 0.5)
-                flags.append(Flag("expiry_label_guessed", "error",
-                                  "The expiry label could not be read; the date on the other 'date' line was used. Check it."))
-                break
-    for field, (iso, cal) in dates.items():
-        doc[field], doc[field.replace("Date", "Calendar")] = iso, cal
-    for field in ("birthDate", "expiryDate"):
-        if field not in doc:
-            # With auto-accept on, an unreadable expiry must still reach a person
-            sev = "error" if (auto_accept and field == "expiryDate") else "warning"
-            flags.append(Flag(f"{field}_not_found", sev, f"Could not read {field}"))
-
-    if doc.get("expiryDate"):
-        if doc.get("expiryCalendar") == "gregorian":
-            if date.fromisoformat(doc["expiryDate"]) < today:
-                flags.append(Flag("document_expired", "error", "The document has expired"))
-        else:
-            flags.append(hijri_expiry_flag(doc, today, auto_accept))
-    if doc.get("birthDate") and doc.get("birthCalendar") == "gregorian" and date.fromisoformat(doc["birthDate"]) > today:
-        flags.append(Flag("birth_date_in_future", "error", "Date of birth is in the future"))
-
-    from_number = doc.pop("_numberBirthDate", None)
-    if from_number and doc.get("birthDate") and doc["birthDate"] != from_number and doc.get("birthCalendar") == "gregorian":
-        flags.append(Flag("birth_date_differs_from_id_number", "error",
-                          f"Birth date {doc['birthDate']} differs from the date inside the ID number ({from_number})."))
-    elif from_number and "birthDate" not in doc:
-        doc["birthDate"], doc["birthCalendar"] = from_number, "gregorian"
-        flags = [f for f in flags if f.code != "birthDate_not_found"]
-        flags.append(Flag("birth_date_from_id_number", "warning", "Birth date was taken from the ID number."))
-
-    low = sorted(k for k, v in scores.items() if v is not None and v < min_confidence)
+    doc, flags = c.doc, c.flags
+    low = sorted(k for k, v in c.scores.items() if v is not None and v < min_confidence)
     if low:
         flags.append(Flag("low_confidence_fields", "error", "Low OCR confidence for: " + ", ".join(low)))
     flags.append(Flag("visual_zone_only", "warning" if auto_accept else "error",
                       "This ID has no MRZ, so fields come from OCR of printed text only. "
                       + ("Review is recommended." if auto_accept else "A person must review it before approval.")))
-
     nat = doc.get("nationality", "")
     code = (nat.upper() if re.fullmatch(r"[A-Za-z]{3}", nat) else arabic_country_code(nat)) or _resolve_country(nat)
     doc["nationalityCode"] = code
     doc["nationalityName"] = country_name(code) if code else ""
-    doc["checks"] = checks
-    doc["fieldConfidence"] = {k: round(float(v), 3) for k, v in scores.items() if v is not None}
+    doc["checks"] = c.checks
+    doc["fieldConfidence"] = {k: round(float(v), 3) for k, v in c.scores.items() if v is not None}
     doc["correctedFields"] = []
-    doc["valid"] = bool(checks.get("id_number"))
+    doc["valid"] = bool(c.checks.get("id_number"))
     return {"document": doc, "flags": [f.to_dict() for f in flags],
             "needsReview": any(f.severity == "error" for f in flags) or "idNumber" not in doc}
