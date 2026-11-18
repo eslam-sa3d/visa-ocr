@@ -924,3 +924,40 @@ def test_a_file_manager_looking_at_a_model_folder_does_not_break_its_checksum(tm
     assert reg.status(m) == "verified"
     (reg.full_path(m) / "extra.bin").write_bytes(b"a real change")
     assert reg.status(m) == "mismatch"
+
+
+def test_auto_engine_reads_with_the_other_pair_when_paddleocr_breaks(monkeypatch, caplog):
+    """Found by the first container run: PaddleOCR was installed with its models but could not start, and the job failed
+    although Tesseract and RapidOCR were ready."""
+    from app import engines
+
+    class Broken:
+        name = "paddle-ocr"
+
+        def extract(self, images, hint):
+            raise RuntimeError("PDX has already been initialized")
+
+    class Pair:
+        name = "ensemble"
+
+        def extract(self, images, hint):
+            return EngineOutput(engine="ensemble", mrz_lines=list(MRZ))
+    monkeypatch.setitem(engines._INSTANCES, "paddle-ocr", Broken())
+    monkeypatch.setitem(engines._INSTANCES, "ensemble", Pair())
+    with caplog.at_level("ERROR", logger="visa-ocr"):
+        out = engines.AutoEngine().extract([png_bytes()], None)
+    assert out.mrz_lines == MRZ and out.engine == "ensemble" and "PaddleOCR failed (RuntimeError)" in caplog.text
+
+
+def test_paddlex_cache_goes_to_a_temporary_folder_when_there_is_no_home(monkeypatch, tmp_path):
+    from app.engines import paddle_ocr
+    monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
+    blocked = tmp_path / "file-not-folder"
+    blocked.write_text("x")
+    monkeypatch.setenv("HOME", str(blocked / "home"))             # cannot be created
+    paddle_ocr._writable_cache_home()
+    import os
+    assert os.path.isdir(os.environ["PADDLE_PDX_CACHE_HOME"]) and os.access(os.environ["PADDLE_PDX_CACHE_HOME"], os.W_OK)
+    monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", "/chosen/by/operator")
+    paddle_ocr._writable_cache_home()
+    assert os.environ["PADDLE_PDX_CACHE_HOME"] == "/chosen/by/operator"

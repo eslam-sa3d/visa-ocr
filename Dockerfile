@@ -37,6 +37,8 @@ ENV OCR_ENGINE=auto \
     MODELS_DIR=/srv/models \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     PYTHONUNBUFFERED=1 \
+    HOME=/data/home \
+    PADDLE_PDX_CACHE_HOME=/data/home/.paddlex \
     JOB_DB_PATH=/data/jobs.db
 
 # The copied files keep the permissions they had on the build host. A checkout with owner-only files (umask 077) would leave
