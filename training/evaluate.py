@@ -5,7 +5,9 @@ Both files use the label format "<image path>\\t<text>". Predictions are matched
 
     python training/evaluate.py --labels data/rec/val_real.txt --predictions preds.txt --out metrics.json
 
-Lower CER is better. A model is only worth promoting if CER on REAL validation lines improves.
+Lower CER is better. A line with no prediction counts as completely wrong. Besides the totals, results are given per script
+(byScript) and per group (byGroup): the group is the part of the image file name before "__", so a golden set whose files are
+named passport__0001.png, iqama__0001.png ... is scored per document type.
 """
 from __future__ import annotations
 
@@ -53,10 +55,11 @@ def evaluate(labels: dict[str, str], preds: dict[str, str], arabic: bool = False
     missing = 0
     for rel, ref in labels.items():
         if rel not in preds:
-            missing += 1
-            continue
-        ref_n, hyp_n = normalise(ref, arabic, digits), normalise(preds[rel], arabic, digits)
-        for bucket in ("all", script_of(ref)):
+            missing += 1                       # counted below as an empty reading: fully wrong, never left out
+        ref_n, hyp_n = normalise(ref, arabic, digits), normalise(preds.get(rel, ""), arabic, digits)
+        name = Path(rel).name
+        group = "group:" + name.split("__", 1)[0] if "__" in name else None
+        for bucket in filter(None, ("all", "script:" + script_of(ref), group)):
             t = totals[bucket]
             t["samples"] += 1
             t["chars"] += max(len(ref_n), 1)
@@ -64,11 +67,12 @@ def evaluate(labels: dict[str, str], preds: dict[str, str], arabic: bool = False
             t["exact"] += ref_n == hyp_n
 
     def summary(t: dict) -> dict:
-        return {"samples": t["samples"], "cer": round(t["edits"] / t["chars"], 4) if t["chars"] else None,
+        return {"samples": t["samples"], "chars": t["chars"], "cer": round(t["edits"] / t["chars"], 4) if t["chars"] else None,
                 "exactMatch": round(t["exact"] / t["samples"], 4) if t["samples"] else None}
 
     result = {"missingPredictions": missing, **summary(totals["all"])}
-    result["byScript"] = {k: summary(v) for k, v in sorted(totals.items()) if k != "all"}
+    result["byScript"] = {k[7:]: summary(v) for k, v in sorted(totals.items()) if k.startswith("script:")}
+    result["byGroup"] = {k[6:]: summary(v) for k, v in sorted(totals.items()) if k.startswith("group:")}
     return result
 
 

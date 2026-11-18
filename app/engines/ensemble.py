@@ -7,33 +7,59 @@
 Agreement is only trusted when every check digit passes: two engines can share a mistake that the check digits cannot see."""
 from __future__ import annotations
 
-import os
+import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config as app_config
 
-from ..mrz import MrzError, parse_mrz
+from ..mrz import MrzError, check_score, parse_mrz
 from .base import EngineOutput, EngineUnavailable
 from .rapid_ocr import RapidOcrEngine
 from .tesseract_mrz import TesseractMrzEngine
 from .tesseract_text import read_text_lines
 
 
-def agreement_confidence() -> float:
-    try:
-        return float(os.environ.get("AGREEMENT_CONFIDENCE", "0.99"))
-    except ValueError:
-        return 0.99
+log = logging.getLogger("visa-ocr")
+
+agreement_confidence = app_config.agreement_confidence
+_score = check_score
+
+PAGE_TEXT_SECONDS = 6.0            # time for reading the printed page when there is no hard limit
+MIN_PAGE_TEXT_SECONDS = 0.5        # with less than this left of a hard limit, the printed page is not read
+MIN_PRINTED_VALUE = 5              # shortest optional-data value looked for on the printed page
+
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
 
 
-def _score(lines):
-    try:
-        checks = parse_mrz(lines).checks
-    except MrzError:
-        return -1, False
-    return sum(checks.values()), all(checks.values())
+def _readers_pool() -> ThreadPoolExecutor:
+    """One pool for the life of the process (two reader calls per job in flight), instead of a new one per request."""
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadPoolExecutor(max_workers=2 * max(app_config.job_threads(), app_config.worker_threads(), 1),
+                                           thread_name_prefix="reader")
+    return _pool
+
+
+def _printed_choice(pa, pb, page_text: list[dict] | None) -> int | None:
+    """0 or 1 when the printed page shows the optional data exactly as ONE of the two readings has it (the personal number is
+    printed on the page as well as in the MRZ); None when it shows neither, or both."""
+    def norm(t: str) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(t).upper())
+    va, vb = norm(pa.optional_data), norm(pb.optional_data)
+    if va == vb or min(len(va), len(vb)) < MIN_PRINTED_VALUE:
+        return None
+    tokens = {norm(ln.get("text", "")) for ln in page_text or []}
+    tokens |= {norm(w) for ln in page_text or [] for w in str(ln.get("text", "")).split()}
+    seen_a, seen_b = va in tokens, vb in tokens
+    if seen_a == seen_b:
+        return None
+    return 0 if seen_a else 1
 
 
 _ALL_FIELDS = ("documentNumber", "nationality", "sex", "issuingState", "documentType", "names")
@@ -41,9 +67,10 @@ _KEY_FIELDS = ("format", "type_code", "issuing_state", "surname", "given_names",
                "sex", "expiry_date")
 
 
-def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
+def _agree_except_optional(a: list[str], b: list[str], page_text: list[dict] | None = None) -> tuple[list[str], bool] | None:
     """Two readings that both pass every check digit and give the same value for every field except the optional data.
-    Returns the lines to use, or None. Not for visas: their optional data has no check digit at all.
+    Returns (the lines to use, whether the printed page settled the difference), or None. Not for visas: their optional data
+    has no check digit at all.
 
     Where the readings differ, the character that fits the rest of that optional field is taken (a digit in a field of digits,
     a letter in a field of letters); the field is still reported as unconfirmed."""
@@ -64,6 +91,9 @@ def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
         pa, pb = parse_mrz(a), parse_mrz(b)
     if len(a) != len(b) or any(len(x) != len(y) for x, y in zip(a, b)):
         return None
+    printed = _printed_choice(pa, pb, page_text)
+    if printed is not None:
+        return (a, b)[printed], True
     merged = []
     for la, lb in zip(a, b):
         out = list(la)
@@ -77,8 +107,8 @@ def _agree_except_optional(a: list[str], b: list[str]) -> list[str] | None:
     try:
         pm = parse_mrz(merged)
     except MrzError:
-        return a
-    return merged if pm.valid and all(getattr(pm, f) == getattr(pa, f) for f in _KEY_FIELDS) else a
+        return a, False
+    return (merged if pm.valid and all(getattr(pm, f) == getattr(pa, f) for f in _KEY_FIELDS) else a), False
 
 
 def _squash(lines: list[str]) -> list[str]:
@@ -156,12 +186,9 @@ class EnsembleEngine:
         self.tesseract = TesseractMrzEngine()
         self.rapid = RapidOcrEngine()
 
-    def extract(self, images, doc_type_hint):
-        started = time.monotonic()
-        if doc_type_hint in ("iqama", "gcc_id"):                 # no MRZ on these cards: skip the slow MRZ search
-            fields = self._text_fields(images)
-            if fields:
-                return EngineOutput(engine=self.name, mrz_lines=None, fields=fields)
+    def _read_both(self, images, doc_type_hint):
+        """Run Tesseract and RapidOCR side by side. Returns (tesseract output or None, rapidocr output or None, seconds each
+        took). Raises only when neither reader produced an answer."""
         # The two readers run side by side: Tesseract is a separate process and RapidOCR releases the interpreter lock, so on two
         # or more cores the wait is the slower of the two, not the sum.
         took: dict[str, float] = {}
@@ -173,33 +200,30 @@ class EnsembleEngine:
             finally:
                 took[name] = round(time.monotonic() - t0, 2)
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            ft = pool.submit(timed, "tesseract", self.tesseract)
-            fr = pool.submit(timed, "rapidocr", self.rapid)
-            t = ft.result()
+        pool = _readers_pool()
+        ft = pool.submit(timed, "tesseract", self.tesseract)
+        fr = pool.submit(timed, "rapidocr", self.rapid)
+        # Either reader can be missing (not installed) or fail on one image (a Tesseract timeout, a decoder error). The other
+        # one's reading still stands; it is then a single reading, so it carries no agreement and goes to review as usual.
+        results, failures = {}, {}
+        for name, fut in (("tesseract", ft), ("rapidocr", fr)):
             try:
-                r = fr.result()
-            except EngineUnavailable:
-                r = None
-        if r is None:
-            if not t.mrz_lines:
-                t.fields = self._text_fields(images, started)
-            return t
-        # Why a result was or was not confirmed, for the reviewer and for support: which reader found the MRZ, how long each
-        # took, and where the two readings differ.
-        # The printed page is only needed when the two readers do not settle everything between them. It is read then, in
-        # whatever time is left (always when there is no hard limit).
-        settled = bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines and _score(t.mrz_lines)[1]
-        if (t.mrz_lines or r.mrz_lines) and not settled and not (r.fields or {}).get("textLines"):
-            limit = app_config.ocr_deadline()
-            left = (limit - (time.monotonic() - started)) if limit else 6.0
-            if left > 0.5:
-                try:
-                    t0 = time.monotonic()
-                    r.fields = {**(r.fields or {}), "textLines": self.rapid.page_text(images, left)}
-                    took["pageText"] = round(time.monotonic() - t0, 2)
-                except Exception:  # noqa: BLE001 - the page text is extra evidence, never a reason to fail the read
-                    pass
+                results[name] = fut.result()
+            except EngineUnavailable as exc:
+                failures[name] = exc
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s reader failed on this document: %s", name, type(exc).__name__)
+                failures[name] = exc
+        if not results:
+            first = failures["tesseract"]
+            if isinstance(first, EngineUnavailable) and isinstance(failures["rapidocr"], EngineUnavailable):
+                raise first
+            raise failures["rapidocr"] if isinstance(first, EngineUnavailable) else first
+        return results.get("tesseract"), results.get("rapidocr"), took
+
+    def _decide(self, t, r, took: dict, images, started: float):
+        """Compare the two readings and choose: identical, same characters with different filler counts, a shared line 2,
+        agreement on everything but the optional data, or the reading with more check digits passing."""
         readers = {"tesseract": bool(t.mrz_lines), "rapidocr": bool(r.mrz_lines), "seconds": took,
                    "agree": bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines, "differences": _differences(t.mrz_lines, r.mrz_lines)}
         if t.mrz_lines and r.mrz_lines and t.mrz_lines != r.mrz_lines and _squash(t.mrz_lines) == _squash(r.mrz_lines):
@@ -231,7 +255,14 @@ class EnsembleEngine:
                                 fields={"readers": readers, "agreedFields": ["documentNumber", "nationality", "sex"],
                                         "textLines": r.fields.get("textLines") or []})
         if t.mrz_lines and r.mrz_lines:
-            merged = _agree_except_optional(t.mrz_lines, r.mrz_lines)
+            settled_optional = _agree_except_optional(t.mrz_lines, r.mrz_lines, (r.fields or {}).get("textLines"))
+            if settled_optional and settled_optional[1]:
+                # The readers differ only inside the optional data, and the printed page shows that value exactly as one of
+                # them read it: three sources, two agree. Nothing is left unconfirmed.
+                readers["agree"] = "all fields; optional data settled by the printed page"
+                return EngineOutput(engine=self.name, mrz_lines=settled_optional[0], mrz_confidence=agreement_confidence(),
+                                    fields={**r.fields, "readers": readers, "agreedFields": list(_ALL_FIELDS)})
+            merged = settled_optional[0] if settled_optional else None
             if merged:
                 # Every field a decision rests on is identical in both readings; they differ only inside the optional data
                 # (personal number), at characters its check digit cannot tell apart. The rest is confirmed; that field is not.
@@ -253,3 +284,38 @@ class EnsembleEngine:
             if "documentNumber" not in agreed:
                 extra["numberDisputed"] = True      # both readings pass the check digit with different numbers
         return EngineOutput(engine=self.name, mrz_lines=best.mrz_lines, mrz_confidence=None, fields=extra)
+
+    def extract(self, images, doc_type_hint):
+        started = time.monotonic()
+        if doc_type_hint in ("iqama", "gcc_id"):                 # no MRZ on these cards: skip the slow MRZ search
+            fields = self._text_fields(images)
+            if fields:
+                return EngineOutput(engine=self.name, mrz_lines=None, fields=fields)
+        t, r, took = self._read_both(images, doc_type_hint)
+        if r is None:                                   # RapidOCR not installed or failed: Tesseract alone, as before
+            if not t.mrz_lines:
+                t.fields = self._text_fields(images, started)
+            return t
+        if t is None:                                   # Tesseract failed: RapidOCR alone; one reader, so no agreement
+            fields = dict(r.fields or {})
+            if not r.mrz_lines:
+                fields.update(self._text_fields(images, started))
+            fields["readers"] = {"tesseract": False, "rapidocr": bool(r.mrz_lines), "seconds": took, "agree": False,
+                                 "differences": [], "failed": ["tesseract"]}
+            return EngineOutput(engine=self.name, mrz_lines=r.mrz_lines, mrz_confidence=r.mrz_confidence, fields=fields)
+        # Why a result was or was not confirmed, for the reviewer and for support: which reader found the MRZ, how long each
+        # took, and where the two readings differ.
+        # The printed page is only needed when the two readers do not settle everything between them. It is read then, in
+        # whatever time is left (always when there is no hard limit).
+        settled = bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines and _score(t.mrz_lines)[1]
+        if (t.mrz_lines or r.mrz_lines) and not settled and not (r.fields or {}).get("textLines"):
+            limit = app_config.ocr_deadline()
+            left = (limit - (time.monotonic() - started)) if limit else PAGE_TEXT_SECONDS
+            if left > MIN_PAGE_TEXT_SECONDS:
+                try:
+                    t0 = time.monotonic()
+                    r.fields = {**(r.fields or {}), "textLines": self.rapid.page_text(images, left)}
+                    took["pageText"] = round(time.monotonic() - t0, 2)
+                except Exception as exc:  # noqa: BLE001 - the page text is extra evidence, never a reason to fail the read
+                    log.warning("printed-page read failed: %s", type(exc).__name__)
+        return self._decide(t, r, took, images, started)

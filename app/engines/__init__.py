@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Callable
-import os
+import threading
 
 from .base import Engine, EngineOutput, EngineUnavailable
 from .ensemble import EnsembleEngine
@@ -19,6 +19,7 @@ _REGISTRY: dict[str, Callable[[], Engine]] = {
     # "regula": RegulaEngine,        # on-prem Docker Web API adapter (after POC)
 }
 _INSTANCES: dict[str, Engine] = {}
+_INSTANCES_LOCK = threading.Lock()
 
 
 class AutoEngine:
@@ -53,17 +54,10 @@ class AutoEngine:
         same lines and every check digit passes, two independent readers agree, and that agreement is the confidence. If the
         pair reads it better (more check digits pass), their reading is used."""
         from .. import config
-        from ..mrz import MrzError, parse_mrz
+        from ..mrz import check_score as score
         threshold = config.min_confidence_unprotected()
         if out.mrz_confidence is not None and out.mrz_confidence >= threshold:
             return out
-
-        def score(lines):
-            try:
-                checks = parse_mrz(lines).checks
-            except MrzError:
-                return -1, False
-            return sum(checks.values()), all(checks.values())
 
         try:
             second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
@@ -74,8 +68,7 @@ class AutoEngine:
         s_out, perfect_out = score(out.mrz_lines)
         s_sec, perfect_sec = score(second.mrz_lines)
         if second.mrz_lines == out.mrz_lines and perfect_out:
-            from .ensemble import agreement_confidence
-            out.mrz_confidence = max(out.mrz_confidence or 0.0, agreement_confidence())      # two independent readers agree
+            out.mrz_confidence = max(out.mrz_confidence or 0.0, config.agreement_confidence())      # two independent readers agree
             return out
         if s_sec > s_out:
             return second
@@ -84,7 +77,8 @@ class AutoEngine:
 
 def get_engine() -> Engine:
     """The engine chosen by OCR_ENGINE (default: auto = PaddleOCR if available, else Tesseract)."""
-    return get_engine_by_name(os.environ.get("OCR_ENGINE", "auto"))
+    from .. import config
+    return get_engine_by_name(config.ocr_engine())
 
 
 def get_engine_by_name(name: str) -> Engine:
@@ -92,7 +86,9 @@ def get_engine_by_name(name: str) -> Engine:
     if name not in _REGISTRY:
         raise EngineUnavailable(f"Unknown OCR_ENGINE: {name}")
     if name not in _INSTANCES:
-        _INSTANCES[name] = _REGISTRY[name]()
+        with _INSTANCES_LOCK:                      # two first requests must not build two sets of models
+            if name not in _INSTANCES:
+                _INSTANCES[name] = _REGISTRY[name]()
     return _INSTANCES[name]
 
 

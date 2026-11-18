@@ -4,12 +4,17 @@
 Output (in --out):
   images/            cropped line images
   train.txt          real train lines + a capped amount of synthetic lines
-  val_real.txt       validation lines from REAL documents (use this to decide whether a model is better)
+  val_real.txt       validation lines from REAL documents. Used DURING training to pick the best checkpoint, so it cannot
+                     also judge the finished model: that is the golden set's job (see auto_train.py --golden-dir)
   val_synth.txt      synthetic validation lines (sanity check only)
-  stats.json         counts per script, characters missing from the model dictionary
+  stats.json         counts per script, what was skipped and why, characters missing from the model dictionary, and a
+                     SHA-256 of the label files (the dataset's identity, recorded with every model trained on it)
 
 Label files use PaddleOCR's format: "<relative image path>\\t<text>".
 Lines from the same document always go to the same split, so validation is not contaminated.
+Only corrections that a second person approved (tools/approve_corrections.py) are used. A correction whose MRZ lines fail
+their own check digits, a malformed record, a line in another language, a duplicate crop and any crop that is also in
+the golden set are skipped and counted.
 
     python training/prepare_dataset.py --store-dir "$TRAINING_STORE_DIR" \
         --synth-dir data/synth --dict path/to/arabic_dict.txt --out data/rec
@@ -17,9 +22,12 @@ Lines from the same document always go to the same split, so validation is not c
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import os
 import random
+import re
 import shutil
 import sys
 from collections import Counter
@@ -28,7 +36,10 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app import crypto  # noqa: E402
+from app.mrz import check_score  # noqa: E402
 from app.textutil import script_of  # noqa: E402
+from app.training_store import approved_correction, load_corrections  # noqa: E402
 
 MIN_SIDE = 8
 
@@ -43,28 +54,94 @@ def _read_labels(path: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def from_store(store_dir: Path, out: Path) -> list[dict]:
-    """Cut line crops from reviewer corrections saved by POST /v1/jobs/{id}/corrections."""
+_MRZ_SHAPED = re.compile(r"[A-Z0-9<]{28,44}")
+
+
+def _well_formed(line) -> bool:
+    return (isinstance(line, dict) and isinstance(line.get("image"), int) and not isinstance(line.get("image"), bool)
+            and isinstance(line.get("text"), str) and bool(line["text"].strip())
+            and isinstance(line.get("box"), list) and len(line["box"]) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in line["box"]))
+
+
+def golden_hashes(folder: Path | None) -> set[str]:
+    """SHA-256 of the pixels of every image in the golden set, so none of them can slip into training data."""
+    out: set[str] = set()
+    if folder and folder.is_dir():
+        for path in folder.rglob("*"):
+            if path.suffix.lower() in (".png", ".jpg", ".jpeg"):
+                try:
+                    with Image.open(path) as im:
+                        out.add(_pixel_hash(im))
+                except OSError:
+                    continue
+    return out
+
+
+def _pixel_hash(im) -> str:
+    rgb = im.convert("RGB")
+    return hashlib.sha256(repr(rgb.size).encode() + rgb.tobytes()).hexdigest()
+
+
+def from_store(store_dir: Path, out: Path, lang: str | None = None, skipped: Counter | None = None,
+               exclude: set[str] | None = None) -> list[dict]:
+    """Cut line crops from reviewer corrections saved by POST /v1/jobs/{id}/corrections. Only approved corrections count."""
     samples = []
+    skipped = skipped if skipped is not None else Counter()
+    exclude = exclude or set()
+    seen: set[str] = set()
     for job in sorted((store_dir / "jobs").glob("*")):
-        corr = job / "correction.json"
-        if not corr.exists():
+        found = load_corrections(job)
+        if not found:
+            if (job / "correction.json").exists() or (job / "corrections").is_dir():
+                skipped["unreadable"] += 1
             continue
-        data = json.loads(corr.read_text(encoding="utf-8"))
+        data = approved_correction(job)
+        if data is None:
+            skipped["notApproved"] += 1
+            continue
+        raw_lines = data.get("lines") if isinstance(data.get("lines"), list) else []
+        lines = [ln for ln in raw_lines if _well_formed(ln)]
+        skipped["malformedLines"] += len(raw_lines) - len(lines)
+        # A corrected MRZ must agree with its own check digits. One that does not is a typing slip or a planted label.
+        mrz = [ln["text"] for ln in lines if _MRZ_SHAPED.fullmatch(ln["text"])]
+        if len(mrz) in (2, 3) and not check_score(mrz)[1]:
+            skipped["mrzLabelFailsCheckDigits"] += 1
+            continue
         images = {int(p.stem): p for p in (job / "images").glob("*") if p.stem.isdigit()}
-        for n, line in enumerate(data.get("lines", [])):
+        for n, line in enumerate(lines):
+            if lang and line.get("lang") != lang:
+                skipped["otherLanguage"] += 1
+                continue
             src = images.get(line["image"])
             if src is None:
+                skipped["noImage"] += 1
                 continue
-            with Image.open(src) as raw:
-                im = ImageOps.exif_transpose(raw)          # boxes are in the upright image, as the readers saw it
-                x1, y1, x2, y2 = line["box"]
-                x1, y1 = max(0, min(x1, x2)), max(0, min(y1, y2))
-                x2, y2 = min(im.width, max(x1, x2)), min(im.height, max(y1, y2))
-                if x2 - x1 < MIN_SIDE or y2 - y1 < MIN_SIDE:
-                    continue
-                rel = f"images/real_{job.name}_{n}.png"
-                im.convert("RGB").crop((x1, y1, x2, y2)).save(out / rel)
+            try:
+                with Image.open(io.BytesIO(crypto.unseal(src.read_bytes()))) as raw:      # stored encrypted when a key is set
+                    im = ImageOps.exif_transpose(raw)          # boxes are in the upright image, as the readers saw it
+                    x1, y1, x2, y2 = line["box"]
+                    x1, y1 = max(0, min(x1, x2)), max(0, min(y1, y2))
+                    x2, y2 = min(im.width, max(x1, x2)), min(im.height, max(y1, y2))
+                    if x2 - x1 < MIN_SIDE or y2 - y1 < MIN_SIDE:
+                        skipped["boxTooSmall"] += 1
+                        continue
+                    crop = im.convert("RGB").crop((x1, y1, x2, y2))
+            except (OSError, ValueError, crypto.DataKeyError):
+                skipped["unreadableImage"] += 1
+                continue
+            digest = _pixel_hash(crop)
+            if digest in exclude:
+                skipped["inGoldenSet"] += 1
+                continue
+            if (digest, line["text"]) in seen:
+                skipped["duplicate"] += 1
+                continue
+            seen.add((digest, line["text"]))
+            rel = f"images/real_{job.name}_{n}.png"
+            buf = io.BytesIO()
+            crop.save(buf, "PNG")
+            (out / rel).write_bytes(buf.getvalue())
             samples.append({"doc": job.name, "path": rel, "text": line["text"]})
     return samples
 
@@ -127,14 +204,17 @@ def main() -> None:
     ap.add_argument("--max-synth-ratio", type=float, default=3.0,
                     help="synthetic training lines are capped at this multiple of the real training lines")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--lang", help="use only corrected lines marked with this language (en or ar)")
+    ap.add_argument("--golden-dir", type=Path, help="the golden set; any crop that is also in it is left out of training")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     (args.out / "images").mkdir(parents=True, exist_ok=True)
 
     real: list[dict] = []
+    skipped: Counter = Counter()
     if args.store_dir:
-        real += from_store(args.store_dir, args.out)
+        real += from_store(args.store_dir, args.out, args.lang, skipped, golden_hashes(args.golden_dir))
     for folder in args.ppocrlabel_dir:
         real += from_ppocrlabel(folder, args.out)
     synth_train: list[dict] = []
@@ -159,6 +239,8 @@ def main() -> None:
         "realTrain": len(real_train), "realVal": len(real_val),
         "synthTrain": len(synth_train), "synthVal": len(synth_val),
         "scripts": dict(Counter(script_of(s["text"]) for s in train)),
+        "skipped": dict(skipped), "seed": args.seed, "lang": args.lang,
+        "datasetSha256": hashlib.sha256(b"".join((args.out / n).read_bytes() for n in ("train.txt", "val_real.txt"))).hexdigest(),
     }
     if args.dict:
         known = set(args.dict.read_text(encoding="utf-8").splitlines()) | {" "}

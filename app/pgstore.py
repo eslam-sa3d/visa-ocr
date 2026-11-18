@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from . import config
+from . import config, crypto
 from .jobs import Job
 
 SCHEMA = """
@@ -100,8 +100,9 @@ class PgJobStore:
     def submit(self, job_id: str, images: list[bytes], hint: str | None, applicant: dict) -> None:
         from psycopg.types.json import Jsonb
         with self._conn() as c:
+            # images, form data, results and errors are encrypted in the database when DATA_KEY_FILE is set
             c.execute("UPDATE jobs SET images=%s, hint=%s, applicant=%s, status='queued' WHERE id=%s",
-                      (images, hint, Jsonb(applicant), job_id))
+                      ([crypto.seal(b) for b in images], hint, Jsonb(crypto.seal_json(applicant)), job_id))
 
     def get(self, job_id: str) -> Job | None:
         # An expired job is never returned; the rows themselves are deleted by sweep() (housekeeping thread and workers), not on
@@ -113,7 +114,7 @@ class PgJobStore:
             return None
         status = "queued" if row[3] == "preparing" else row[3]
         return Job(id=row[0], correlation_id=row[1], owner=row[2], status=status, created_at=row[4],
-                   result=row[5], error=row[6], consent_training=bool(row[7]))
+                   result=crypto.unseal_json(row[5]), error=crypto.unseal_json(row[6]), consent_training=bool(row[7]))
 
     def update(self, job_id: str, **changes) -> None:
         from psycopg.types.json import Jsonb
@@ -122,7 +123,7 @@ class PgJobStore:
             if key == "status":
                 sets.append("status=%s"); vals.append(value)
             elif key in ("result", "error"):
-                sets.append(f"{key}=%s"); vals.append(Jsonb(value) if value is not None else None)  # noqa: S608 - fixed names
+                sets.append(f"{key}=%s"); vals.append(Jsonb(crypto.seal_json(value)) if value is not None else None)  # noqa: S608 - fixed names
             elif key == "consent_training":
                 sets.append("consent_training=%s"); vals.append(bool(value))
         if changes.get("status") in ("done", "failed"):
@@ -170,8 +171,8 @@ class PgJobStore:
         with self._conn() as c:
             return c.execute("UPDATE jobs SET status=%s, result=%s, error=%s, images=NULL, hint=NULL, applicant=NULL "
                              "WHERE id=%s AND status='processing' AND attempts=%s",
-                             (status, Jsonb(result) if result is not None else None,
-                              Jsonb(error) if error is not None else None, job_id, token)).rowcount == 1
+                             (status, Jsonb(crypto.seal_json(result)) if result is not None else None,
+                              Jsonb(crypto.seal_json(error)) if error is not None else None, job_id, token)).rowcount == 1
 
     def claim(self) -> "Claim | None":
         """Take the oldest queued job, or None. Safe with any number of concurrent workers. The returned tuple also carries
@@ -184,7 +185,7 @@ class PgJobStore:
                 "RETURNING id, images, hint, applicant, attempts", (time.time(),)).fetchone()
         if not row:
             return None
-        claim = Claim((row[0], [bytes(b) for b in row[1]], row[2], row[3] or {}))
+        claim = Claim((row[0], [crypto.unseal(b) for b in row[1]], row[2], crypto.unseal_json(row[3]) or {}))
         claim.token = row[4]
         return claim
 

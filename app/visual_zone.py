@@ -15,7 +15,7 @@ from datetime import date
 
 from . import gcc_ids
 from .countries import arabic_country_code, country_name
-from .textutil import normalize_arabic, to_ascii_digits
+from .textutil import HIJRI_MARGIN_DAYS, hijri_to_gregorian, normalize_arabic, to_ascii_digits
 from .validation import Flag
 
 # field -> label patterns (matched on text after Arabic normalisation, lower-cased)
@@ -38,9 +38,9 @@ def _load_label_overrides() -> None:
     """Add label patterns for other ID layouts without code changes: config/id_labels.json (or $ID_LABELS_FILE),
     {"idNumber": ["رقم البطاقة", ...], ...}. Extra patterns are tried after the built-in ones."""
     import json
-    import os
+    from . import config  # noqa: WPS433
     from pathlib import Path
-    path = Path(os.environ.get("ID_LABELS_FILE", Path(__file__).parent.parent / "config" / "id_labels.json"))
+    path = Path(config.id_labels_file() or Path(__file__).parent.parent / "config" / "id_labels.json")
     if not path.is_file():
         return
     try:
@@ -81,6 +81,30 @@ def saudi_id_check(number: str) -> bool:
                 d -= 9
         total += d
     return total % 10 == 0
+
+
+def hijri_expiry_flag(doc: dict, today: date, auto_accept: bool) -> Flag:
+    """Expiry check for a Hijri date. The date is converted by the arithmetic calendar, which can be a day or two away from
+    the official Umm al-Qura date, so only a clear answer is given: expired by more than the margin is an error, valid by
+    more than the margin is noted with the converted date, and anything closer still needs a person."""
+    try:
+        y, m, d = (int(x) for x in str(doc.get("expiryDate", "")).split("-"))
+        approx = hijri_to_gregorian(y, m, d)
+    except ValueError:
+        approx = None
+    if approx is None:
+        return Flag("expiry_hijri_not_checked", "error" if auto_accept else "warning",
+                    "Expiry is a Hijri date that could not be converted; check it against the Gregorian date")
+    doc["expiryDateGregorianApprox"] = approx.isoformat()
+    days = (approx - today).days
+    if days < -HIJRI_MARGIN_DAYS:
+        return Flag("document_expired", "error", f"The document has expired (Hijri {doc['expiryDate']}, about {approx.isoformat()})")
+    if days > HIJRI_MARGIN_DAYS:
+        return Flag("expiry_hijri_converted", "warning",
+                    f"Expiry is a Hijri date, about {approx.isoformat()} (within {HIJRI_MARGIN_DAYS} days): not expired")
+    return Flag("expiry_hijri_not_checked", "error" if auto_accept else "warning",
+                f"Expiry is a Hijri date within {HIJRI_MARGIN_DAYS} days of today (about {approx.isoformat()}); "
+                "check it against the Gregorian date")
 
 
 def parse_date(text: str) -> tuple[str, str] | None:
@@ -453,8 +477,7 @@ def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: 
             if date.fromisoformat(doc["expiryDate"]) < today:
                 flags.append(Flag("document_expired", "error", "The document has expired"))
         else:
-            flags.append(Flag("expiry_hijri_not_checked", "error" if auto_accept else "warning",
-                              "Expiry is a Hijri date; expiry check needs the Gregorian date"))
+            flags.append(hijri_expiry_flag(doc, today, auto_accept))
     if doc.get("birthDate") and doc.get("birthCalendar") == "gregorian" and date.fromisoformat(doc["birthDate"]) > today:
         flags.append(Flag("birth_date_in_future", "error", "Date of birth is in the future"))
 

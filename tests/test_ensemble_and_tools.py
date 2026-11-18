@@ -127,14 +127,14 @@ def test_low_paddle_confidence_is_raised_only_when_the_second_pair_agrees(monkey
 
 def test_tilt_estimate_finds_a_rotated_page():
     from PIL import Image, ImageDraw
-    from app.engines.tesseract_mrz import _estimate_tilt
+    from app.engines.tesseract_mrz import estimate_tilt
     page = Image.new("L", (900, 600), 255)
     d = ImageDraw.Draw(page)
     for y in range(60, 560, 40):
         d.rectangle([60, y, 840, y + 12], fill=0)              # rows of "text"
-    assert _estimate_tilt(page, Image) == 0
+    assert estimate_tilt(page, Image) == 0
     tilted = page.rotate(-4, Image.BICUBIC, fillcolor=255)
-    assert abs(_estimate_tilt(tilted, Image) - 4) <= 1          # the angle that turns it back level
+    assert abs(estimate_tilt(tilted, Image) - 4) <= 1          # the angle that turns it back level
 
 
 def test_hard_deadline_setting_is_read(monkeypatch):

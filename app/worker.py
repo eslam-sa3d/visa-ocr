@@ -19,8 +19,8 @@ def _run(job_id: str, images: list[bytes], hint: str | None, applicant: Applican
         return pipeline.run(images, hint, applicant, engine_getter())
     except EngineUnavailable as exc:
         return "failed", {"code": "engine_unavailable", "message": str(exc)}
-    except Exception:  # noqa: BLE001
-        log.exception("job %s failed", job_id)
+    except Exception as exc:  # noqa: BLE001 - type and place only: an error text can repeat a value from the document
+        log.error("job %s failed: %s at %s", job_id, type(exc).__name__, pipeline.where(exc))
         return "failed", {"code": "internal_error", "message": "Processing failed"}
 
 
@@ -76,8 +76,8 @@ def worker_loop(store, stop: threading.Event, engine_getter: Callable = get_engi
                 last_sweep = time.time()
             if not work_once(store, engine_getter):
                 stop.wait(idle)
-        except Exception:  # noqa: BLE001  - a database blip must not kill the worker
-            log.exception("worker loop error")
+        except Exception as exc:  # noqa: BLE001  - a database blip must not kill the worker
+            log.error("worker loop error: %s at %s", type(exc).__name__, pipeline.where(exc))
             stop.wait(2)
 
 

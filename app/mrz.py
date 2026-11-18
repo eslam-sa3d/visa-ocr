@@ -544,3 +544,15 @@ def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
                     and not re.search(r"[0-9]{4,}", first)):
                 return [first.ljust(size, FILLER), second]
     return None
+
+
+def check_score(lines: list[str] | None) -> tuple[int, bool]:
+    """(check digits passing, all passing) for these MRZ lines; (-1, False) when they are not an MRZ. Every reader ranks its
+    attempts with this one rule."""
+    if not lines:
+        return -1, False
+    try:
+        checks = parse_mrz(lines).checks
+    except MrzError:
+        return -1, False
+    return sum(checks.values()), all(checks.values())

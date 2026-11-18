@@ -14,9 +14,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import config
+from . import config, crypto
 
 PENDING = ("queued", "processing")
+TIMED_OUT = {"code": "timed_out", "message": "Processing took too long and was stopped. Upload the document again."}
 
 
 @dataclass
@@ -52,9 +53,16 @@ class JobStore:
         return config.job_ttl_seconds() if self._ttl is None else self._ttl
 
     def _purge_locked(self) -> None:
-        cutoff = time.time() - self.ttl
+        now = time.time()
+        cutoff = now - self.ttl
         for jid in [k for k, (t, _) in self._jobs.items() if t < cutoff]:
             del self._jobs[jid]
+        # A job still queued or running long after it was accepted is stuck (a reader that never returned). Mark it failed
+        # so it stops holding one of the MAX_PENDING_JOBS places and the caller gets an answer.
+        stuck = now - config.job_max_seconds()
+        for t, job in self._jobs.values():
+            if job.status in PENDING and t < stuck:
+                job.status, job.error = "failed", dict(TIMED_OUT)
 
     def sweep(self) -> None:
         with self._lock:
@@ -145,7 +153,10 @@ class SqliteJobStore:
         return config.job_ttl_seconds() if self._ttl is None else self._ttl
 
     def _purge(self, c: sqlite3.Connection) -> None:
-        c.execute("DELETE FROM jobs WHERE created_ts < ?", (time.time() - self.ttl,))
+        now = time.time()
+        c.execute("DELETE FROM jobs WHERE created_ts < ?", (now - self.ttl,))
+        c.execute("UPDATE jobs SET status='failed', error=? WHERE status IN ('queued','processing') AND created_ts < ?",
+                  (json.dumps(TIMED_OUT), now - config.job_max_seconds()))      # stuck jobs: see JobStore._purge_locked
 
     def create(self, correlation_id: str, owner: str = "") -> Job:
         job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
@@ -186,14 +197,16 @@ class SqliteJobStore:
         if not row:
             return None
         return Job(id=row[0], correlation_id=row[1], owner=row[2], status=row[3], created_at=row[4],
-                   result=json.loads(row[5]) if row[5] else None, error=json.loads(row[6]) if row[6] else None,
+                   result=json.loads(crypto.unseal_text(row[5])) if row[5] else None,
+                   error=json.loads(crypto.unseal_text(row[6])) if row[6] else None,
                    consent_training=bool(row[7]))
 
     def update(self, job_id: str, **changes) -> None:
         cols, vals = [], []
         for key, value in changes.items():
             if key in ("result", "error"):
-                value = json.dumps(value, ensure_ascii=False) if value is not None else None
+                # results hold the applicant's data: encrypted in the file when DATA_KEY_FILE is set
+                value = crypto.seal_text(json.dumps(value, ensure_ascii=False)) if value is not None else None
             elif key == "consent_training":
                 value = int(bool(value))
             elif key not in ("status",):

@@ -57,7 +57,7 @@ internet-facing host.
 - It scores the new model and the model in use on the same real validation lines.
 - A new model replaces the current one only if its error rate is lower by `--min-gain`, and only when `--activate`
   is given. Without `--activate` it is registered as a candidate and `report.json` says how to approve it.
-- A worse model is never activated. Rolling back is `register_model.py --activate` on the older id.
+- A worse model is never activated. Rolling back is one command: `python training/register_model.py --rollback --task text_recognition --lang ar`.
 - No restart is needed after a switch: the PaddleOCR engine notices the changed `models/manifest.json` and loads the
   newly active model on the next read. The models folder must be shared with (or copied to) every worker machine.
 - Install the weekly schedule with `sudo sh deploy/install_autotrain.sh` (systemd timer, Sunday 02:00; settings in
@@ -69,3 +69,52 @@ internet-facing host.
 
 Tested: the decisions (skip, candidate, activate, refuse) with the training step replaced. Not tested: the real
 fine-tuning step with production weights on a GPU. Start without `--activate` until a few cycles have been checked by hand.
+
+## Controls on the learning loop (added after the engineering and ML review)
+
+**1. Labels are approved by a second person.** A correction sent to `/v1/jobs/{id}/corrections` is stored as `pending`, one
+file per submission under `jobs/<id>/corrections/` (nothing is overwritten). It becomes training data only when a different
+person approves it on the server:
+
+```
+python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --list            # least confident readings first
+python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --show JOB_ID
+python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --approve JOB_ID --approver "Name"
+```
+
+The submitter cannot approve their own correction. Whatever is approved, the dataset builder still drops a correction whose
+MRZ lines fail their own check digits, malformed records, lines in another language than the one being trained, duplicate
+crops and any crop that is also in the golden set. `stats.json` and the run report count each kind.
+
+**2. A fixed golden set judges every model.** Create a folder outside the training store with `labels.txt`
+(`<image>\t<text>` per line) and the line images. Name the files `<type>__<n>.png` (`passport__0001.png`,
+`iqama__0001.png`) to get scores per document type. It is never used for training and is not touched by the retention purge,
+so it needs its own legal basis and access control. Pass it with `--golden-dir`. Without it a candidate is built and
+registered, but never compared and never activated.
+
+**3. The gate fails closed.** A candidate replaces the model in use only when, on the golden set: its CER is lower by at
+least `--min-gain` and by more than the measurement noise; no script and no document type with 20 or more golden lines got
+worse; no fewer lines are read exactly right; and both models could be scored. A line with no prediction counts as fully
+wrong. The reasons for a refusal are in `report.json` under `gate.reasons`.
+
+**4. The switch is safe and can be undone.** The manifest is replaced whole under a lock. A running server loads the newly
+active model, tries it on a blank image, and only then starts using it; if that fails it keeps the model it has and logs
+`model switch refused`. To go back: `register_model.py --rollback --task text_recognition --lang ar`. To put a registered
+candidate in use by hand: `register_model.py --activate-existing ID`.
+
+**5. The automation cannot run away.** Training that fails twice on the same data is not tried again until the data
+changes. A lock left by a dead run is cleared. Checkpoints are deleted after export and only the newest
+`--keep-candidates` unused candidates are kept. The systemd unit limits CPU, memory and disk priority. Every run adds a line
+to `history.jsonl` with the dataset checksum, seed, settings and package versions.
+
+**6. Learning can carry over.** By default each run starts from the pretrained weights and sees only the corrections still
+inside the retention period. With `--continue-from-current` it starts from the checkpoint of the model in use (when this
+tool trained it), so gains accumulate. Turn it on only with a golden set in place: the golden set is what detects a model
+that forgot older document types.
+
+**7. Check the confidence thresholds against outcomes.** Each correction records the reader's confidence and which fields
+the reviewer changed. `python tools/calibration_report.py --store-dir "$TRAINING_STORE_DIR"` prints the error rate per
+confidence band and how many readings accepted without review were wrong.
+
+Still not done anywhere: a real fine-tune with production weights on the training server, and shadow scoring of a candidate
+on live traffic before activation.
