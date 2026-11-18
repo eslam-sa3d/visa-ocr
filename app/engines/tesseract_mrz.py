@@ -1,8 +1,9 @@
 """Baseline open-source engine: finds the MRZ with Tesseract.
 
-This is the POC baseline, not the final engine. For better accuracy install the
-OCR-B traineddata (ocrb.traineddata) into the Tesseract data directory and set
-TESSERACT_LANG=ocrb. Everything here works offline.
+MRZ print is OCR B, which the general English model reads poorly. The project ships its own model for it,
+models/tessdata/ocrb_int.traineddata (how it was made: training/mrz_tesseract/README.md). It is used automatically when its
+checksum in models/tessdata/SHA256SUMS matches; otherwise the engine falls back to the installed English model.
+Everything here works offline.
 """
 from __future__ import annotations
 
