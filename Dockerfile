@@ -39,7 +39,10 @@ ENV OCR_ENGINE=auto \
     PYTHONUNBUFFERED=1 \
     JOB_DB_PATH=/data/jobs.db
 
-RUN useradd --system --no-create-home ocr && mkdir /data && chown ocr /data && chmod +x docker-entrypoint.sh
+# The copied files keep the permissions they had on the build host. A checkout with owner-only files (umask 077) would leave
+# the service user unable to read its own code, so make everything under /srv readable here, whatever the host had.
+RUN useradd --system --no-create-home ocr && mkdir /data && chown ocr /data \
+    && chmod -R a+rX /srv && chmod 755 docker-entrypoint.sh
 USER ocr
 VOLUME /data
 # Binding port 443 as a non-root user needs this capability on the container (Docker grants NET_BIND_SERVICE by default).
