@@ -232,3 +232,19 @@ Line crops and label files made for a training run are deleted when the run ends
 - A Hijri expiry date is converted approximately. More than 3 days past is `document_expired`; more than 3 days ahead is noted (`expiry_hijri_converted`) with the converted date in `expiryDateGregorianApprox`; anything closer still needs a person (`expiry_hijri_not_checked`).
 - `python tools/suggest_deadline.py` measures this server and suggests a value for `OCR_DEADLINE_SECONDS`. The limit now runs from the start of the read, including any wait for a free reader.
 - `python tools/accuracy_real.py /secure/specimens` scores a labelled folder of real documents; `REAL_SAMPLES_DIR=/secure/specimens pytest` makes it a release gate.
+
+## Settings added with the NCA controls check
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `PRODUCTION` | off | Refuses to start with authentication off, the test page or API pages on, models without a checksum allowed, unencrypted storage, or a self-signed certificate. |
+| `API_KEYS_FILE` | unset | JSON list of keys with a role (`uploader`, `reviewer`, `admin`) and an optional expiry date. Keys in `API_KEYS` keep the role `full`. |
+| `UI_ENABLED` | on (off in production) | The built-in test page at `/ui`. |
+| `AUDIT_LOG_FILE` | unset | File that receives the security event log, one JSON line per event, no personal data. |
+| `UPLOAD_SCAN_COMMAND` | unset | Malware scanner run on every upload; the file path is added to the command. Exit 0 clean, 1 infected, anything else refuses the upload. |
+| `UPLOAD_SCAN_SECONDS` | 20 | Time limit for one scan. |
+| `DATA_CIPHER` | Fernet | `aes256gcm` encrypts new data with AES-256-GCM. |
+| `TLS_CIPHERS` | forward-secret AEAD suites | Cipher list for the built-in HTTPS; TLS 1.0 and 1.1 are never accepted. |
+
+New answers a caller can receive: `403 forbidden` (the key's role does not allow the action), `401 key_expired`,
+`422 malware_detected`, `503 scan_unavailable`. See `docs/NCA_CONTROLS.md` for the control each setting serves.

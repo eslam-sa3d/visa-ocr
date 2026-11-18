@@ -49,6 +49,42 @@ def validate_image(data: bytes, claimed_type: str | None) -> tuple[int, int]:
     return width, height
 
 
+def scan_for_malware(data: bytes) -> None:
+    """Run the configured scanner (UPLOAD_SCAN_COMMAND, for example "clamdscan --no-summary") on one upload before anything
+    decodes it. The file is written to a private temporary file and its path is added to the command; no shell is involved.
+    Exit code 0 means clean and 1 means infected (the ClamAV convention). Anything else (scanner missing, timed out, crashed)
+    refuses the upload: an upload that could not be scanned is not let through. No command set: no scan."""
+    command = config.upload_scan_command()
+    if not command:
+        return
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+    from . import audit
+    fd, path = tempfile.mkstemp(prefix="visa-ocr-scan-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(path, 0o644)                      # the scanner daemon runs as another user and must be able to read it
+        try:
+            code = subprocess.run([*shlex.split(command), path], capture_output=True, timeout=config.upload_scan_seconds()).returncode
+        except (OSError, subprocess.SubprocessError) as exc:
+            audit.event("upload_scan_unavailable", error=type(exc).__name__)
+            raise UploadError(503, "scan_unavailable", "The file could not be checked for malware; try again shortly") from None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if code == 1:
+        audit.event("upload_malware_found", bytes=len(data))
+        raise UploadError(422, "malware_detected", "The file was rejected by the malware scanner")
+    if code != 0:
+        audit.event("upload_scan_unavailable", exit_code=code)
+        raise UploadError(503, "scan_unavailable", "The file could not be checked for malware; try again shortly")
+
+
 def upscaled_size(width: int, height: int, target_width: int) -> tuple[int, int] | None:
     """Size for enlarging an image to target_width, or None when the result would exceed the pixel cap."""
     if width >= target_width or width <= 0:

@@ -25,10 +25,17 @@ for f in "$CERT" "$KEY"; do
   fi
 done
 if [ ! -f "$CERT" ] || [ ! -s "$CERT" ] || [ ! -f "$KEY" ] || [ ! -s "$KEY" ]; then
+  if [ "${PRODUCTION:-0}" = "1" ]; then
+    echo "ERROR: PRODUCTION=1 and no TLS certificate at $CERT. Mount your certificate and key (TLS_CERT, TLS_KEY); a self-signed one is not generated in production." >&2
+    exit 1
+  fi
   echo "WARNING: no TLS certificate at $CERT: generating a self-signed one (test only)" >&2
   mkdir -p "$(dirname "$CERT")"
   openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=${TLS_CN:-localhost}" \
     -addext "subjectAltName=DNS:${TLS_CN:-localhost},DNS:localhost,IP:127.0.0.1" -keyout "$KEY" -out "$CERT" 2>/dev/null
   chmod 600 "$KEY"
 fi
-exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --ssl-certfile "$CERT" --ssl-keyfile "$KEY"
+# TLS 1.2 and 1.3 only, with forward-secret AEAD cipher suites (TLS 1.0 and 1.1 have no such suites, so they cannot connect).
+# Override TLS_CIPHERS only to match your organisation's cryptographic standard.
+TLS_CIPHERS="${TLS_CIPHERS:-ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL:!eNULL:!MD5:!SHA1}"
+exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --ssl-certfile "$CERT" --ssl-keyfile "$KEY" --ssl-ciphers "$TLS_CIPHERS" --no-server-header

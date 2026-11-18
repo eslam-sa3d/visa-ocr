@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import threading
 import time
@@ -29,14 +30,14 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, crypto, pipeline, security, worker
+from . import audit, config, crypto, pipeline, security, worker
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
 from .mrz import MrzError
 from .review import Applicant, compare_applicant
 from .training_store import TrainingStore
-from .uploads import validate_image, shrink_for_ocr
+from .uploads import scan_for_malware, shrink_for_ocr, validate_image
 
 log = logging.getLogger("visa-ocr")
 
@@ -99,6 +100,34 @@ if security.weak_plain_keys():
     log.warning("Some API_KEYS values are shorter than 24 characters. Use long random keys (openssl rand -hex 32).")
 if not security.auth_enabled():       # raises when a key variable is set but holds no usable key: refuse to start
     log.warning("API_KEYS is not set: authentication is OFF. Do not expose this service to a network.")
+
+
+def production_problems() -> list[str]:
+    """Settings that must not reach production. With PRODUCTION=1 the service refuses to start while any of them holds."""
+    out = []
+    if not security.auth_enabled():
+        out.append("no API key is configured (API_KEYS, API_KEY_SHA256 or API_KEYS_FILE)")
+    if security.weak_plain_keys():
+        out.append("an API key is shorter than 24 characters")
+    if config.ui_enabled():
+        out.append("the test page is on (UI_ENABLED)")
+    if config.api_docs():
+        out.append("the interactive API pages are on (API_DOCS)")
+    if os.environ.get("ALLOW_UNVERIFIED_MODELS", "").strip().lower() in ("1", "true", "yes", "on"):
+        out.append("models without a checksum are allowed (ALLOW_UNVERIFIED_MODELS)")
+    if (training.enabled or config.job_db_path() or config.database_url()) and not (crypto.enabled() or config.storage_encrypted()):
+        out.append("stored personal data is not encrypted (set DATA_KEY_FILE, or DATA_AT_REST_ENCRYPTED=1 on encrypted volumes)")
+    if os.environ.get("ALLOW_ANONYMOUS", "").strip() == "1":
+        out.append("ALLOW_ANONYMOUS is set")
+    return out
+
+
+if config.production():
+    _problems = production_problems()
+    if _problems:
+        raise RuntimeError("PRODUCTION=1 but the set-up is not safe for production: " + "; ".join(_problems))
+audit.event("service_started", version=app.version, production=config.production(), auth=security.auth_enabled(),
+            encrypted=bool(crypto.enabled() or config.storage_encrypted()), engine=config.ocr_engine())
 
 
 @app.middleware("http")
@@ -175,7 +204,9 @@ _UI_FILE = Path(__file__).parent / "static" / "index.html"
 
 @app.get("/ui", include_in_schema=False, response_class=HTMLResponse)
 def ui() -> HTMLResponse:
-    """Plain test page: upload an image and see the result. No external assets (works offline)."""
+    """Plain test page: upload an image and see the result. No external assets (works offline). Off in production."""
+    if not config.ui_enabled():
+        raise HTTPException(404, {"code": "not_found", "message": "Not found"})
     return HTMLResponse(_UI_FILE.read_text(encoding="utf-8"))
 
 
@@ -185,7 +216,7 @@ def root() -> dict:
         "service": "visa-ocr",
         "version": app.version,
         "health": "/healthz",
-        "ui": "/ui",
+        **({"ui": "/ui"} if config.ui_enabled() else {}),
         **({"docs": "/docs"} if _docs else {}),
         "endpoints": ["POST /v1/documents/extract", "GET /v1/jobs/{id}", "POST /v1/mrz/parse",
                       "POST /v1/jobs/{id}/corrections", "GET /v1/models"],
@@ -210,6 +241,7 @@ def _applicant(**kw) -> Applicant:
 @app.post("/v1/mrz/parse")
 def mrz_parse(body: MrzParseRequest, request: Request, owner: str = Depends(security.authenticate)) -> dict:
     security.limiter.check(security.client_id(request, owner))
+    security.allow(request, "parse", owner)
     if any(len(line) > 200 for line in body.lines):
         raise HTTPException(422, {"code": "mrz_unsupported", "message": "An MRZ line is far too long"})
     try:
@@ -248,6 +280,7 @@ async def extract(
     owner: str = Depends(security.authenticate),
 ) -> dict:
     security.limiter.check(security.client_id(request, owner))
+    security.allow(request, "upload", owner)
     if not 1 <= len(files) <= config.max_files():
         raise HTTPException(422, {"code": "bad_file_count", "message": f"Send 1 to {config.max_files()} images"})
     # Count and reserve in one step: a separate "is there room" check lets concurrent uploads overrun the cap.
@@ -263,6 +296,7 @@ async def extract(
         for f in files:
             data = await f.read(config.max_bytes() + 1)
             validate_image(data, f.content_type)
+            await run_in_threadpool(scan_for_malware, data)        # only when UPLOAD_SCAN_COMMAND is set
             async with _shrink_slots:              # decode and resize off the event loop
                 images.append(await run_in_threadpool(shrink_for_ocr, data))   # queue, readers and training store get this image
         if consent_training and training.enabled:
@@ -284,21 +318,24 @@ async def extract(
         if training.enabled:
             training.remove(job.id)
         raise
+    audit.event("job_created", job=job.id, key=owner, images=len(images), consent_training=bool(consent_training and training.enabled))
     return {"jobId": job.id, "status": job.status, "correlationId": job.correlation_id}
 
 
-def _own_job(job_id: str, owner: str):
+def _own_job(job_id: str, owner: str, any_job: bool = False):
     # Job ids are 32 hex characters. Anything else is answered here and never reaches the store (a NUL byte, for one, makes
     # PostgreSQL raise).
     job = store.get(job_id) if re.fullmatch(r"[0-9a-f]{32}", job_id) else None
-    if job is None or (owner != "anonymous" and job.owner != owner):   # same answer for "not yours" and "not found"
+    # A reviewer or administrator key may open any job; every other key only its own.
+    if job is None or (owner != "anonymous" and job.owner != owner and not any_job):   # same answer for "not yours" and "not found"
         raise HTTPException(404, {"code": "job_not_found", "message": "Unknown or expired job id"})
     return job
 
 
 @app.get("/v1/jobs/{job_id}")
-def get_job(job_id: str, owner: str = Depends(security.authenticate)) -> dict:
-    return _own_job(job_id, owner).to_dict()
+def get_job(job_id: str, request: Request, owner: str = Depends(security.authenticate)) -> dict:
+    security.allow(request, "read", owner)
+    return _own_job(job_id, owner, security.may_read_any(request)).to_dict()
 
 
 class LineLabel(BaseModel):
@@ -330,8 +367,9 @@ class CorrectionRequest(BaseModel):
 
 
 @app.post("/v1/jobs/{job_id}/corrections", status_code=201)
-def add_correction(job_id: str, body: CorrectionRequest, owner: str = Depends(security.authenticate)) -> dict:
-    job = _own_job(job_id, owner)
+def add_correction(job_id: str, body: CorrectionRequest, request: Request, owner: str = Depends(security.authenticate)) -> dict:
+    security.allow(request, "correct", owner)
+    job = _own_job(job_id, owner, security.may_read_any(request))
     if not training.enabled:
         raise HTTPException(409, {"code": "training_store_disabled",
                                   "message": "Training data collection is not enabled on this server"})
@@ -352,11 +390,13 @@ def add_correction(job_id: str, body: CorrectionRequest, owner: str = Depends(se
     except FileNotFoundError:                      # purged since the upload (retention, or consent withdrawn)
         raise HTTPException(409, {"code": "no_training_consent",
                                   "message": "Training data for this job was removed"}) from None
+    audit.event("correction_submitted", job=job_id, key=owner, lines=len(body.lines), fields_changed=len(changed))
     return {"stored": True, "status": "pending", "lines": len(body.lines)}
 
 
 @app.get("/v1/models")
-def list_models(owner: str = Depends(security.authenticate)) -> dict:
+def list_models(request: Request, owner: str = Depends(security.authenticate)) -> dict:
+    security.allow(request, "models", owner)
     registry = Registry()
     try:
         # fresh=False: a model folder is hashed again only when one of its files changed size or time, so asking often is cheap
