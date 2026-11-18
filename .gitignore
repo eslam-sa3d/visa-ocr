@@ -8,5 +8,9 @@ real-samples/
 photos/
 *.tgz
 models/*
+!models/tessdata/
 !models/manifest.json
 .local/
+!models/tessdata/
+!models/tessdata/ocrb_int.traineddata
+!models/tessdata/SHA256SUMS

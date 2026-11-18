@@ -12,6 +12,9 @@ RUN apt-get update \
 
 # Two sizes. The default "full" image has PaddleOCR (needed for fine-tuned models). The "lite" image leaves it out and is
 # several times smaller:   docker build --build-arg VARIANT=lite -t visa-ocr:lite .
+# PaddlePaddle 3.3.1 has no wheel for Linux on ARM. On an Apple-chip Mac build the full image for the servers' architecture:
+#   docker build --platform linux/amd64 -t visa-ocr:latest .
+# or build the lite image natively (--build-arg VARIANT=lite).
 ARG VARIANT=full
 WORKDIR /srv
 # LOCKED=1 (default) installs from the .lock file: every package, direct and indirect, must match its recorded SHA-256, so a
