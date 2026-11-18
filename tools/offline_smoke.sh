@@ -9,7 +9,8 @@ NAME="visa-ocr-offline-smoke-$$"
 # On any failure the container's own output is printed first: it says why the service stopped.
 trap 'code=$?; if [ $code -ne 0 ]; then echo "--- container output ---"; docker logs "$NAME" 2>&1 | tail -40; echo "--- container state: $(docker inspect -f "{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}" "$NAME" 2>/dev/null) ---"; fi; docker rm -f "$NAME" >/dev/null 2>&1 || true; exit $code' EXIT
 docker run -d --name "$NAME" --network none -e ALLOW_ANONYMOUS=1 -v "$(cd "$(dirname "$SAMPLE")" && pwd)/$(basename "$SAMPLE"):/tmp/sample:ro" "$IMAGE" >/dev/null
-docker exec "$NAME" python - <<'PY'
+# -i passes the script below to Python inside the container; without it Python gets no input, does nothing and exits 0.
+OUT="$(docker exec -i "$NAME" python - <<'PY'
 import json, ssl, time, urllib.request, uuid
 ctx = ssl._create_unverified_context()
 base = "https://127.0.0.1:443"
@@ -33,4 +34,8 @@ for _ in range(120):
 print("status:", j["status"], "| engine:", (j.get("result") or {}).get("engine"), "| error:", (j.get("error") or {}).get("code"))
 raise SystemExit(0 if j["status"] == "done" else "FAIL: the document was not read offline")
 PY
+)"
+echo "$OUT"
+# A pass needs the proof line from inside the container, not just a clean exit.
+echo "$OUT" | grep -q "^status: done" || { echo "FAIL: no finished read was reported from inside the container" >&2; exit 1; }
 echo "PASS: started and read a document with the network disabled"
