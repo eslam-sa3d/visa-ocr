@@ -546,6 +546,27 @@ def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
     return None
 
 
+_TYPE_LETTERS = {"TD3": "P", "TD1": "ACI", "TD2": "ACIP", "MRVA": "V", "MRVB": "V"}
+
+
+def plausible_reading(lines: list[str] | None) -> bool:
+    """False when lines of the right length are almost certainly not an MRZ. Printed text on the front of a card can come out
+    as two or three lines of the right length with a stray '<' in them. A real MRZ, even a badly read one, starts with a document
+    type letter and has dates where dates belong. Rejected: a wrong type letter with at most one check digit passing (one in
+    ten random lines passes a check by chance), and no check digit passing with neither date readable."""
+    if not lines:
+        return False
+    try:
+        parsed = parse_mrz(lines)
+    except MrzError:
+        return False
+    passing = sum(parsed.checks.values())
+    type_ok = lines[0].strip()[:1] in _TYPE_LETTERS.get(parsed.format, "")
+    if not type_ok and passing <= 1:
+        return False
+    return not (passing == 0 and parsed.birth_date is None and parsed.expiry_date is None)
+
+
 def check_score(lines: list[str] | None) -> tuple[int, bool]:
     """(check digits passing, all passing) for these MRZ lines; (-1, False) when they are not an MRZ. Every reader ranks its
     attempts with this one rule."""
