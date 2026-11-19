@@ -30,8 +30,12 @@ class AutoEngine:
     name = "auto"
 
     def extract(self, images, doc_type_hint):
+        wants_mrz = doc_type_hint not in ("iqama", "gcc_id")
         try:
-            out = get_engine_by_name(PaddleOcrEngine.name).extract(images, doc_type_hint)
+            paddle = get_engine_by_name(PaddleOcrEngine.name)
+            # When an MRZ is expected, PaddleOCR's slow last-chance searches wait until the second pair has had its turn.
+            staged = wants_mrz and hasattr(paddle, "mrz_retries")
+            out = paddle.extract(images, doc_type_hint, deep=False) if staged else paddle.extract(images, doc_type_hint)
         except EngineUnavailable:
             return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except Exception as exc:  # noqa: BLE001
@@ -43,14 +47,22 @@ class AutoEngine:
         # PaddleOCR reads whole pages. When it finds no MRZ on a document that should have one (a passport small inside a
         # full-page scan, a tilted or glary photo), the ensemble's strip search and rotation search often still succeeds.
         has_text = bool(out.fields.get("textLines"))
-        wants_mrz = doc_type_hint not in ("iqama", "gcc_id")
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
             try:
                 second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
             except EngineUnavailable:
-                return out
-            if second.mrz_lines or not has_text:
+                second = None
+            if second is not None and second.mrz_lines:
                 return second
+            if staged:
+                try:
+                    out.mrz_lines, out.mrz_confidence = paddle.mrz_retries(images)
+                except Exception as exc:  # noqa: BLE001 - a failed last look must not lose the text already read
+                    log.error("PaddleOCR's last MRZ search failed (%s)", type(exc).__name__)
+            if second is not None and not out.mrz_lines and not has_text:
+                return second
+            if second is None:
+                return out
         if out.mrz_lines:
             out = self._second_opinion(out, images, doc_type_hint)
         return out
