@@ -3,7 +3,7 @@ import hashlib
 import json
 import ssl
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ def roles(tmp_path, monkeypatch):
     entries = [{"name": n, "sha256": hashlib.sha256(k.encode()).hexdigest(), "role": r, **e} for n, k, r, e in (
         ("portal", KEYS["portal"], "uploader", {"expires": (date.today() + timedelta(days=30)).isoformat()}),
         ("review-ui", KEYS["reviewer"], "reviewer", {}), ("ops", KEYS["admin"], "admin", {}),
-        ("retired", KEYS["old"], "uploader", {"expires": (date.today() - timedelta(days=1)).isoformat()}))]
+        ("retired", KEYS["old"], "uploader", {"expires": (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()}))]
     f = tmp_path / "keys.json"
     f.write_text(json.dumps(entries))
     monkeypatch.setenv("API_KEYS_FILE", str(f))

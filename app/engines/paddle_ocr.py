@@ -43,7 +43,7 @@ def _writable_cache_home() -> None:
 _writable_cache_home()
 
 from .. import config
-from ..mrz import find_mrz_lines, lines_confidence
+from ..mrz import check_score, clean_line, find_mrz_lines, lines_confidence
 from ..uploads import upscaled_size
 from ..model_registry import ManifestError, Registry
 from ..textutil import dedupe_overlapping, script_of, to_ascii_digits
@@ -284,6 +284,44 @@ class PaddleOcrEngine:
                     return found, _mrz_score(found, texts, scores)
         return None, None
 
+    def _mrz_around_anchor(self, images, lines: list[dict], reader, np, Image, ImageOps):
+        """In a phone photo the passport is small in the frame: one MRZ line is often read whole while the other comes out
+        broken or with wrong digits. A line that is clearly MRZ shows where the zone is, so cut that strip out (a few line
+        heights above and below), enlarge it and read it again: at that size both lines are read properly."""
+        import re
+        best, best_conf, best_score = None, None, -2
+        for index, raw in enumerate(images):
+            anchors = []
+            for l in lines:
+                text = clean_line(l["text"])
+                if (l["image"] == index and len(l.get("box") or []) == 4 and len(text) >= 20
+                        and re.fullmatch(r"[A-Z0-9<]+", text) and ("<<" in text or len(text) in (30, 36, 44))):
+                    anchors.append(l["box"])
+            if not anchors:
+                continue
+            img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+            for box in anchors[:2]:
+                xs, ys = [p[0] for p in box], [p[1] for p in box]
+                height = max(8, max(ys) - min(ys))
+                margin = (max(xs) - min(xs)) * 0.12
+                strip = img.crop((max(0, int(min(xs) - margin)), max(0, int(min(ys) - 3.2 * height)),
+                                  min(img.width, int(max(xs) + margin)), min(img.height, int(max(ys) + 3.2 * height))))
+                size = upscaled_size(strip.width, strip.height, 1800)
+                if size:
+                    strip = strip.resize(size, Image.LANCZOS)
+                texts, scores = [], []
+                for res in reader.predict(np.array(strip)):
+                    d = _result_dict(res)
+                    texts += [str(t) for t in d.get("rec_texts", [])]
+                    scores += [float(x) for x in d.get("rec_scores", [])]
+                found = find_mrz_lines(texts)
+                score, perfect = check_score(found)
+                if found and score > best_score:
+                    best, best_conf, best_score = found, _mrz_score(found, texts, scores), score
+                if perfect:
+                    return best, best_conf
+        return best, best_conf
+
     def _mrz_from_variants(self, images, reader, np, Image, ImageOps):
         """Last chance for angled photos: straighten the page, then read the whole page and its bottom band."""
         from .. import preprocess
@@ -308,7 +346,9 @@ class PaddleOcrEngine:
         return None, None
 
     # -- extraction --------------------------------------------------------------------
-    def extract(self, images: list[bytes], doc_type_hint: str | None) -> EngineOutput:
+    def extract(self, images: list[bytes], doc_type_hint: str | None, deep: bool = True) -> EngineOutput:
+        """deep=False leaves out the slow last-chance searches (bottom band, straightened page); mrz_retries runs them later.
+        "auto" uses this to let the second pair of readers try first: they are quicker at finding an MRZ this reader missed."""
         try:
             import numpy as np  # noqa: WPS433
             from PIL import Image, ImageOps  # noqa: WPS433
@@ -316,9 +356,22 @@ class PaddleOcrEngine:
             raise EngineUnavailable(f"Missing Python dependency: {exc.name}") from exc
 
         with self._infer:
-            return self._extract(images, np, Image, ImageOps)
+            return self._extract(images, np, Image, ImageOps, deep)
 
-    def _extract(self, images, np, Image, ImageOps) -> EngineOutput:
+    def mrz_retries(self, images: list[bytes]) -> tuple[list[str] | None, float | None]:
+        """The last-chance MRZ searches on their own, for a page already read with deep=False."""
+        import numpy as np  # noqa: WPS433
+        from PIL import Image, ImageOps  # noqa: WPS433
+        if "en" not in self.langs:
+            return None, None
+        with self._infer:
+            reader = self._reader("en")
+            mrz, conf = self._mrz_from_bottom_band(images, reader, np, Image, ImageOps)
+            if not mrz:
+                mrz, conf = self._mrz_from_variants(images, reader, np, Image, ImageOps)
+            return mrz, conf
+
+    def _extract(self, images, np, Image, ImageOps, deep: bool = True) -> EngineOutput:
         lines: list[dict] | None = None
         shared = self._shared_reader()
         if shared is not None:
@@ -334,7 +387,7 @@ class PaddleOcrEngine:
                 self._shared_off, lines = True, None
         if lines is None:
             lines, readers, used_models = self._read_per_language(images, np, Image, ImageOps)
-        return self._finish(images, lines, readers, used_models, np, Image, ImageOps)
+        return self._finish(images, lines, readers, used_models, np, Image, ImageOps, deep)
 
     def _read_per_language(self, images, np, Image, ImageOps) -> tuple[list[dict], dict, dict]:
         """The usual path: one PaddleOCR pipeline per language, each finding and reading the text of every page."""
@@ -365,7 +418,8 @@ class PaddleOcrEngine:
                         })
         return lines, readers, used_models
 
-    def _finish(self, images, lines: list[dict], readers: dict, used_models: dict, np, Image, ImageOps) -> EngineOutput:
+    def _finish(self, images, lines: list[dict], readers: dict, used_models: dict, np, Image, ImageOps,
+                deep: bool = True) -> EngineOutput:
         """Find the MRZ among the lines (with a second and third look at the page when it is not there), drop duplicate
         readings of one box, and build the result."""
         mrz = find_mrz_lines([l["text"] for l in lines if l["lang"] == "en"]) or \
@@ -373,9 +427,18 @@ class PaddleOcrEngine:
         mrz_conf = None
         if mrz:
             mrz_conf = _mrz_score(mrz, [l["text"] for l in lines], [l["score"] or 0 for l in lines])
-        elif "en" in self.langs:
+        on_page = bool(mrz)
+        if "en" in self.langs and not check_score(mrz)[1]:
+            # nothing found, or a reading with a failing check digit: read the strip around the MRZ again, enlarged
             en_reader = readers.get("en") or self._reader("en")
-            mrz, mrz_conf = self._mrz_from_bottom_band(images, en_reader, np, Image, ImageOps)
+            again, again_conf = self._mrz_around_anchor(images, lines, en_reader, np, Image, ImageOps)
+            if again and check_score(again)[1]:        # only a reading whose every check digit passes replaces what was read
+                mrz, mrz_conf = again, again_conf
+        if deep and "en" in self.langs and not on_page and not check_score(mrz)[1]:
+            en_reader = readers.get("en") or self._reader("en")
+            band, band_conf = self._mrz_from_bottom_band(images, en_reader, np, Image, ImageOps)
+            if band and check_score(band)[0] > check_score(mrz)[0]:
+                mrz, mrz_conf = band, band_conf
             if not mrz:
                 mrz, mrz_conf = self._mrz_from_variants(images, en_reader, np, Image, ImageOps)
         # every language reader reads every box; keep the best reading per box (per image)

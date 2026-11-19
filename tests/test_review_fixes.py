@@ -1039,3 +1039,35 @@ def test_pipeline_reports_not_found_for_false_mrz():
                                 mrz_confidence=0.9, fields={"textLines": []}, confidence=0.9)
     status, res = pipeline.run([b"x"], None, Applicant(), Fake())
     assert status == "failed" and res["code"] == "mrz_not_found"
+
+
+def test_auto_lets_the_second_pair_try_before_paddles_slow_search(monkeypatch):
+    """PaddleOCR found no MRZ on the page: the second pair reads next, and PaddleOCR's last-chance search runs only if they
+    find nothing either."""
+    from app import engines
+    from app.engines.base import EngineOutput
+    calls = []
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+
+    class Paddle:
+        def extract(self, images, hint, deep=True):
+            calls.append(("paddle", deep))
+            return EngineOutput(engine="paddle-ocr", mrz_lines=None, mrz_confidence=None, fields={"textLines": [{"text": "x"}]}, confidence=0.9)
+        def mrz_retries(self, images):
+            calls.append(("retries",))
+            return good, 0.8
+
+    class Pair:
+        found = True
+        def extract(self, images, hint):
+            calls.append(("pair",))
+            return EngineOutput(engine="ensemble", mrz_lines=good if self.found else None, mrz_confidence=0.99, fields={}, confidence=0.9)
+
+    pair = Pair()
+    monkeypatch.setattr(engines, "get_engine_by_name", lambda name: Paddle() if name == "paddle-ocr" else pair)
+    out = engines.AutoEngine().extract([b"x"], None)
+    assert out.engine == "ensemble" and calls == [("paddle", False), ("pair",)]
+    calls.clear()
+    pair.found = False
+    out = engines.AutoEngine().extract([b"x"], None)
+    assert out.engine == "paddle-ocr" and out.mrz_lines == good and calls[:3] == [("paddle", False), ("pair",), ("retries",)]
