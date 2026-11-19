@@ -1015,3 +1015,27 @@ def test_read_folder_summary_and_labels(tmp_path):
     rf.make_labels(tmp_path)
     import json
     assert json.loads((tmp_path / "labels.json").read_text()) == {"p/a.jpg": {"documentNumber": "X1", "type": "passport"}}
+
+
+def test_text_shaped_like_an_mrz_is_not_taken_as_one():
+    from app.mrz import plausible_reading
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    assert plausible_reading(good)
+    assert plausible_reading([good[0], good[1][:9] + "0" + good[1][10:]])          # one wrong check digit is still an MRZ
+    assert not plausible_reading(["SOMEPRINTEDWORDS<<ONTHEFRONTOFACARDXX", "MORE<PRINTED<TEXTWITHNODIGITSATALLXX<"])
+    assert not plausible_reading(["E" + "A" * 35, "A" * 30 + "<<<<<<"])
+    assert not plausible_reading(None) and not plausible_reading(["TOO SHORT"])
+
+
+def test_pipeline_reports_not_found_for_false_mrz():
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.review import Applicant
+
+    class Fake:
+        name = "fake"
+        def extract(self, images, hint):
+            return EngineOutput(engine="ensemble", mrz_lines=["SOMEPRINTEDWORDS<<ONTHEFRONTOFACARDXX", "MORE<PRINTED<TEXTWITHNODIGITSATALLXX<"],
+                                mrz_confidence=0.9, fields={"textLines": []}, confidence=0.9)
+    status, res = pipeline.run([b"x"], None, Applicant(), Fake())
+    assert status == "failed" and res["code"] == "mrz_not_found"

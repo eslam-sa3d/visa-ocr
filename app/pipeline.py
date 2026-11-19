@@ -11,7 +11,7 @@ from . import config
 from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
-from .mrz import MrzError, parse_mrz
+from .mrz import MrzError, parse_mrz, plausible_reading
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
 from .visual_zone import gulf_evidence, hijri_expiry_flag, parse_gcc_id
@@ -155,6 +155,10 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             output.mrz_lines = _fallback_mrz(images, hint)
             mrz_confidence = None                      # the fallback reports no scores
 
+        if output.mrz_lines and not plausible_reading(output.mrz_lines):
+            log.info("lines shaped like an MRZ were not one (no document type letter or dates); treated as no MRZ")
+            output.mrz_lines, mrz_confidence = None, None
+
         if not output.mrz_lines and text_lines:
             result = parse_gcc_id(text_lines[:config.max_text_lines()])      # bounded: parsing cost grows with the line count
             result = _fill_from_second_reader(result, images, output.engine)
@@ -174,6 +178,8 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         if not output.mrz_lines and card_hint:
             output.mrz_lines = _fallback_mrz(images, hint)      # told "card", but no card fields were read: look for an MRZ after all
             mrz_confidence = None
+        if output.mrz_lines and not plausible_reading(output.mrz_lines):
+            output.mrz_lines = None
         if not output.mrz_lines:
             return "failed", {"code": "mrz_not_found", "message": _no_document_message(hint, bool(text_lines))}
 
