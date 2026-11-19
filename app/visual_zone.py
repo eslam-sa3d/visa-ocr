@@ -234,7 +234,37 @@ def _find_value(field: str, lines: list[dict]) -> tuple[str, dict] | None:
     return None
 
 
-def _find_other_gcc_number(lines, labelled):
+_GULF_NAMES = {
+    "SAU": (r"\bsaudi\b|\bksa\b", ("السعوديه", "هويه مقيم", "هويه وطنيه")),
+    "ARE": (r"\bemirates\b|\buae\b", ("الامارات",)),
+    "KWT": (r"\bkuwait\b", ("الكويت",)),
+    "QAT": (r"\bqatar\b", ("قطر",)),
+    "BHR": (r"\bbahrain\b", ("البحرين",)),
+    "OMN": (r"\boman\b|\bsultanate\b", ("سلطنه عمان",)),
+}
+_GULF_ID_LABEL = re.compile(r"\bcpr\b|\bcivil (?:no|id)\b|\bpersonal no\b|\biqama\b", re.I)
+_GULF_ID_LABEL_AR = ("رقم الهويه", "رقم الاقامه", "الرقم المدني", "الرقم الشخصي", "الرقم الوطني")
+
+
+def gulf_evidence(lines: list[dict]) -> tuple[set[str], bool]:
+    """What the printed text says about where the card is from: the Gulf states it names, and whether it carries a Gulf ID label.
+    A number that merely has the right length proves nothing (a European permit number is nine digits too), so a number with no
+    check digit of its own is only taken as a Gulf ID when the card itself says so."""
+    text = " ".join(str(l.get("text", "")) for l in lines)
+    arabic = normalize_arabic(text)
+    named = {code for code, (latin, ar) in _GULF_NAMES.items() if re.search(latin, text, re.I) or any(a in arabic for a in ar)}
+    return named, bool(_GULF_ID_LABEL.search(text)) or any(a in arabic for a in _GULF_ID_LABEL_AR)
+
+
+def _number_fits_card(info: dict, named: set[str], labelled_gulf: bool) -> bool:
+    if named:
+        return info["country"] in named            # a Kuwaiti card does not carry a Bahraini number
+    if labelled_gulf:
+        return True
+    return info["kind"] in ("uae_emirates_id", "kuwait_civil_id") and info["valid"]     # these two prove themselves
+
+
+def _find_other_gcc_number(lines, labelled, named=frozenset(), labelled_gulf=True):
     """UAE, Kuwait, Qatar or Bahrain number: from the value next to an ID label, or (UAE only) anywhere, since 784 is distinctive."""
     candidates = []
     if labelled:
@@ -244,6 +274,8 @@ def _find_other_gcc_number(lines, labelled):
         digits = re.sub(r"[\s-]", "", to_ascii_digits(text))
         for m in re.finditer(r"\d{9,15}", digits):
             info = gcc_ids.classify(m[0])
+            if info and not _number_fits_card(info, named, labelled_gulf):
+                continue
             if info and (text is candidates[0][0] and labelled or info["kind"] == "uae_emirates_id"):
                 return m[0], info, score
     # The label can be garbled beyond recognition (Arabic words come out reversed or mangled). Take a number that fits one of the
@@ -255,7 +287,7 @@ def _find_other_gcc_number(lines, labelled):
         digits = re.sub(r"(?<=\d)[\s-]+(?=\d)", "", ln["_n"])
         for m in re.finditer(r"(?<!\d)\d{9,15}(?!\d)", digits):
             info = gcc_ids.classify(m[0])
-            if info:
+            if info and _number_fits_card(info, named, labelled_gulf):
                 found[m[0]] = (info, ln.get("score", 1.0))
     if len(found) == 1:
         num, (info, score) = next(iter(found.items()))
@@ -351,6 +383,14 @@ def _saudi_number(c: _Card):
 def _read_id_number(c: _Card) -> None:
     """ID number, card kind and check digit, with a flag for every way the number can be less than certain."""
     id_number, found, repaired, unlabelled = _saudi_number(c)
+    named, labelled_gulf = gulf_evidence(c.lines)
+    if len(named) == 1:
+        c.doc["issuingCountry"] = next(iter(named))
+    # A ten-digit number is a Saudi number only if the card can be Saudi: not when it names another Gulf state only, and not
+    # when the number has no ID label and nothing on the card says Saudi Arabia (passports and foreign permits carry such numbers).
+    if id_number and ((named and "SAU" not in named) or (unlabelled and "SAU" not in named and not labelled_gulf)):
+        id_number = None
+        c.scores.pop("idNumber", None)
     if id_number:
         c.doc["idNumber"] = id_number
         c.doc["kind"] = "iqama" if id_number[0] == "2" else "saudi_national_id"
@@ -367,7 +407,7 @@ def _read_id_number(c: _Card) -> None:
             c.flags.append(Flag("id_number_checksum_failed", "error",
                                 "The ID number fails the check digit. A digit was probably misread."))
         return
-    other = _find_other_gcc_number(c.lines, found)
+    other = _find_other_gcc_number(c.lines, found, named, labelled_gulf)
     if not other:
         c.flags.append(Flag("id_number_not_found", "error", "No 10-digit ID number starting with 1 or 2 was found"))
         return
