@@ -231,6 +231,7 @@ Line crops and label files made for a training run are deleted when the run ends
 - When the two readers differ only in the optional data (for example 6 or G) and the printed page shows the value as one of them read it, that value is used and nothing is left unconfirmed.
 - A Hijri expiry date is converted approximately. More than 3 days past is `document_expired`; more than 3 days ahead is noted (`expiry_hijri_converted`) with the converted date in `expiryDateGregorianApprox`; anything closer still needs a person (`expiry_hijri_not_checked`).
 - `python tools/suggest_deadline.py` measures this server and suggests a value for `OCR_DEADLINE_SECONDS`. The limit now runs from the start of the read, including any wait for a free reader.
+- `python tools/read_folder.py /secure/testdata --out /secure/testdata-results` reads every image in a folder and writes counts per sub-folder plus `sheet.csv`, what was read from each image. A person corrects the sheet and writes `yes` in the `confirmed` column; `--make-labels` then turns the confirmed rows into the `labels.json` used by the next tool.
 - `python tools/accuracy_real.py /secure/specimens` scores a labelled folder of real documents; `REAL_SAMPLES_DIR=/secure/specimens pytest` makes it a release gate.
 
 ## Settings added with the NCA controls check

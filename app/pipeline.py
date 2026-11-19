@@ -14,7 +14,7 @@ from .engines.base import Engine, EngineOutput
 from .mrz import MrzError, parse_mrz
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
-from .visual_zone import hijri_expiry_flag, parse_gcc_id
+from .visual_zone import gulf_evidence, hijri_expiry_flag, parse_gcc_id
 
 log = logging.getLogger("visa-ocr")
 
@@ -161,7 +161,11 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             doc = result["document"]
             found = [k for k in ("idNumber", "nameAr", "nameEn", "nationality", "occupation", "birthDate", "expiryDate", "employer")
                      if doc.get(k)]
-            if "idNumber" in doc or len(found) >= 3:
+            # Without an ID number, labelled fields alone make a card only when the text shows it is a Gulf card (a state's name,
+            # a Gulf ID label or Arabic print). The front of a European or American permit has the same English labels.
+            named, labelled_gulf = gulf_evidence(text_lines)
+            gulf = bool(named or labelled_gulf or any("\u0600" <= ch <= "\u06ff" for l in text_lines for ch in str(l.get("text", ""))))
+            if "idNumber" in doc or (len(found) >= 3 and gulf):
                 a_flags, _ = compare_applicant(doc, applicant)
                 result["flags"] += [f.to_dict() for f in a_flags]
                 result["needsReview"] = any(f["severity"] == "error" for f in result["flags"])

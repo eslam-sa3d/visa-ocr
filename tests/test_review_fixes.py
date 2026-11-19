@@ -961,3 +961,57 @@ def test_paddlex_cache_goes_to_a_temporary_folder_when_there_is_no_home(monkeypa
     monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", "/chosen/by/operator")
     paddle_ocr._writable_cache_home()
     assert os.environ["PADDLE_PDX_CACHE_HOME"] == "/chosen/by/operator"
+
+
+# --- card type is decided by what the card says, not by the length of a number ---
+def _vz_lines(*texts):
+    return [{"text": t, "score": 0.95, "box": [[10, 10 + 30 * i], [300, 10 + 30 * i], [300, 30 + 30 * i], [10, 30 + 30 * i]]}
+            for i, t in enumerate(texts)]
+
+
+def test_foreign_permit_number_is_not_taken_as_a_gulf_id():
+    from app.visual_zone import parse_gcc_id
+    doc = parse_gcc_id(_vz_lines("RESIDENCE PERMIT", "TITRE DE SEJOUR", "X", "810512345", "Name", "DOE JANE"))["document"]
+    assert "idNumber" not in doc and doc["kind"] == "gcc_id"
+
+
+def test_unlabelled_ten_digit_number_needs_a_saudi_card():
+    from app.visual_zone import parse_gcc_id
+    assert "idNumber" not in parse_gcc_id(_vz_lines("PASSPORT", "DOE JANE", "1000000008"))["document"]
+    doc = parse_gcc_id(_vz_lines("KINGDOM OF SAUDI ARABIA", "DOE JANE", "1000000008"))["document"]
+    assert doc["idNumber"] == "1000000008"
+
+
+def test_number_must_belong_to_the_state_the_card_names():
+    from app.visual_zone import parse_gcc_id
+    doc = parse_gcc_id(_vz_lines("STATE OF KUWAIT", "CIVIL ID CARD", "Civil ID No", "810512345"))["document"]
+    assert doc.get("kind") != "bahrain_cpr" and "idNumber" not in doc
+    doc = parse_gcc_id(_vz_lines("KINGDOM OF BAHRAIN", "IDENTITY CARD", "810512345"))["document"]
+    assert doc["kind"] == "bahrain_cpr" and doc["issuingCountry"] == "BHR"
+
+
+def test_self_checking_numbers_need_no_country_name():
+    from app.visual_zone import parse_gcc_id
+    from app.gcc_ids import luhn_ok
+    n = next(f"78419801234567{d}" for d in "0123456789" if luhn_ok(f"78419801234567{d}"))
+    assert parse_gcc_id(_vz_lines("DOE JANE", n))["document"]["kind"] == "uae_emirates_id"
+
+
+def test_read_folder_summary_and_labels(tmp_path):
+    import csv
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("read_folder", Path(__file__).resolve().parent.parent / "tools" / "read_folder.py")
+    rf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rf)
+    text = rf.summarise({"p/a.jpg": {"format": "TD3", "checksPass": True, "needsReview": False, "status": "done", "engine": "x"},
+                         "p/b.jpg": {"format": None, "status": "failed"}})
+    total = text.splitlines()[2].split()
+    assert total[:6] == ["TOTAL", "2", "1", "1", "0", "1"] and total[-1] == "1"
+    with open(tmp_path / "sheet.csv", "w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.DictWriter(fh, fieldnames=rf.SHEET_HEADER)
+        w.writeheader()
+        w.writerow({"file": "p/a.jpg", "type": "passport", "documentNumber": "X1", "confirmed": "yes"})
+        w.writerow({"file": "p/c.jpg", "type": "passport", "documentNumber": "X2", "confirmed": ""})
+    rf.make_labels(tmp_path)
+    import json
+    assert json.loads((tmp_path / "labels.json").read_text()) == {"p/a.jpg": {"documentNumber": "X1", "type": "passport"}}
