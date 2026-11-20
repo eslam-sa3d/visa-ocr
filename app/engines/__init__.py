@@ -55,19 +55,6 @@ class AutoEngine:
                 second = None
             if second is not None and second.mrz_lines:
                 return second
-            if second is not None:
-                # not for a card that names a Gulf state or carries a Gulf ID label: those are read from their printed text
-                from ..visual_zone import gulf_evidence
-                named, labelled = gulf_evidence((out.fields or {}).get("textLines") or [])
-                enlarged = None if (named or labelled) else _enlarged_if_small(images)
-                if enlarged:                         # small print (a low-resolution upload): the pair reads it at twice the size
-                    try:
-                        again = get_engine_by_name(EnsembleEngine.name).extract(enlarged, doc_type_hint)
-                    except Exception as exc:  # noqa: BLE001 - an extra look must not lose what was read
-                        log.error("reading the enlarged image failed (%s)", type(exc).__name__)
-                        again = None
-                    if again is not None and again.mrz_lines:
-                        return again
             if staged:
                 try:
                     # the slowest search (straightening the page) only when something on the page looks like an MRZ
@@ -120,25 +107,6 @@ def _mrz_trace(out) -> bool:
         if len(text) >= 12 and text.count("<") >= 2 and re.fullmatch(r"[A-Z0-9<«‹]+", text):
             return True
     return False
-
-
-def _enlarged_if_small(images: list[bytes]) -> list[bytes] | None:
-    """The images at twice the size when the largest is a low-resolution upload (long side up to 1300 pixels), else None.
-    An MRZ on such an image has characters about ten pixels tall, below what the readers need."""
-    import io
-    from PIL import Image, ImageOps
-    try:
-        opened = [ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB") for raw in images]
-    except Exception:  # noqa: BLE001 - an image that cannot be opened is reported by the step that reads it
-        return None
-    if not opened or max(max(im.size) for im in opened) > 1300:
-        return None
-    out = []
-    for im in opened:
-        buffer = io.BytesIO()
-        im.resize((im.width * 2, im.height * 2), Image.LANCZOS).save(buffer, format="PNG", compress_level=1)
-        out.append(buffer.getvalue())
-    return out
 
 
 def get_engine() -> Engine:
