@@ -303,6 +303,8 @@ class PaddleOcrEngine:
             for box in anchors[:2]:
                 xs, ys = [p[0] for p in box], [p[1] for p in box]
                 height = max(8, max(ys) - min(ys))
+                if height * 4 > max(xs) - min(xs):
+                    continue        # a line running up the page (turned photo): the straightened-page search handles those
                 margin = (max(xs) - min(xs)) * 0.12
                 strip = img.crop((max(0, int(min(xs) - margin)), max(0, int(min(ys) - 3.2 * height)),
                                   min(img.width, int(max(xs) + margin)), min(img.height, int(max(ys) + 3.2 * height))))
