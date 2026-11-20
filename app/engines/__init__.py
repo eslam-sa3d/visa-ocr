@@ -46,6 +46,7 @@ class AutoEngine:
             return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         # PaddleOCR reads whole pages. When it finds no MRZ on a document that should have one (a passport small inside a
         # full-page scan, a tilted or glary photo), the ensemble's strip search and rotation search often still succeeds.
+        images = getattr(out, "upright_images", None) or images      # a photo taken sideways: the other readers get it upright
         has_text = bool(out.fields.get("textLines"))
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
             try:
