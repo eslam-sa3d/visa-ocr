@@ -126,6 +126,33 @@ def number_on_page(number: str | None, tokens: set[str]) -> bool:
     return len(n) >= 6 and n in tokens
 
 
+def _confirm_repaired_number(result: dict, doc: dict, on_page: bool, applicant: Applicant) -> None:
+    """A document number repaired by its check digit (a letter read as its look-alike digit, I as 1, O as 0) is only a
+    suggestion on its own. When the same number is also printed on the page, or was typed on the application form, a second
+    independent source says the same: the repair is then confirmed and the check digit counts as passing."""
+    repairs = doc.get("repairedFields") or []
+    checks = doc.get("checks") or {}
+    if not any(r.startswith("documentNumber:") for r in repairs) or checks.get("document_number") is not False:
+        return
+    number = re.sub(r"[^A-Z0-9]", "", (doc.get("documentNumber") or "").upper())
+    form = re.sub(r"[^A-Z0-9]", "", (applicant.document_number or "").upper())
+    source = "the number printed on the page" if on_page else "the application form" if form and form == number else None
+    if not source:
+        return
+    checks["document_number"] = True
+    if "valid" in doc:
+        doc["valid"] = all(checks.values())
+    doc["repairConfirmedBy"] = source
+    result["flags"] = [f for f in result["flags"]
+                       if not (f["code"] == "mrz_checksum_failed" and f["message"].endswith("document_number"))]
+    if all(r.startswith("documentNumber:") for r in repairs):
+        for f in result["flags"]:
+            if f["code"] == "mrz_field_repaired":
+                f["severity"] = "warning"
+                f["message"] = ("A look-alike character in the document number was corrected using its check digit ("
+                                + ", ".join(repairs) + "), and the corrected number matches " + source + ".")
+
+
 def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: list[dict] | None,
                      applicant: Applicant, mrz_lines: list[str] | None = None, agreed: list[str] | None = None) -> None:
     """Add review flags to a parsed MRZ result (mutates it)."""
@@ -165,6 +192,7 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
         on_page.add("sex")
     if number_on_page(doc.get("documentNumber"), page["tokens"]):
         on_page.add("documentNumber")
+    _confirm_repaired_number(result, doc, "documentNumber" in on_page, applicant)
     by_format: set[str] = set()
     # Passports and ID cards carry a whole-line check digit that visas do not have: when it passes, the line is not a visa line.
     checks = doc.get("checks") or {}

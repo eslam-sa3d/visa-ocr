@@ -1053,8 +1053,8 @@ def test_auto_lets_the_second_pair_try_before_paddles_slow_search(monkeypatch):
         def extract(self, images, hint, deep=True):
             calls.append(("paddle", deep))
             return EngineOutput(engine="paddle-ocr", mrz_lines=None, mrz_confidence=None, fields={"textLines": [{"text": "x"}]}, confidence=0.9)
-        def mrz_retries(self, images):
-            calls.append(("retries",))
+        def mrz_retries(self, images, straighten=True):
+            calls.append(("retries", straighten))
             return good, 0.8
 
     class Pair:
@@ -1070,7 +1070,7 @@ def test_auto_lets_the_second_pair_try_before_paddles_slow_search(monkeypatch):
     calls.clear()
     pair.found = False
     out = engines.AutoEngine().extract([b"x"], None)
-    assert out.engine == "paddle-ocr" and out.mrz_lines == good and calls[:3] == [("paddle", False), ("pair",), ("retries",)]
+    assert out.engine == "paddle-ocr" and out.mrz_lines == good and calls[:3] == [("paddle", False), ("pair",), ("retries", False)]     # no trace of an MRZ: no straightening
 
 
 def test_sideways_page_is_turned_before_it_is_read():
@@ -1099,3 +1099,71 @@ def test_sideways_page_is_turned_before_it_is_read():
     assert SharedReader(None, {"en": Rec(True)}, None, None).quarter_turns(page, tall, crops_for(5)) == 3
     assert SharedReader(None, {"en": Rec(False)}, None, None).quarter_turns(page, wide, crops_for(5)) == 0      # upright page
     assert SharedReader(None, {"en": Rec(False)}, None, None).quarter_turns(page, wide + tall[:1], crops_for(6)) == 0
+
+
+def _repaired_passport():
+    """A passport whose number starts with the letter I, read as the digit 1: the check digit only passes with the letter."""
+    from app.mrz import check_digit
+    number = "I634619<<"
+    body = number + str(check_digit(number)) + "TUN9712168F2712066" + "<" * 14 + "0"
+    line2 = body + str(check_digit(body[0:10] + body[13:20] + body[21:43]))
+    assert len(line2) == 44
+    return ["P<TUNGHARBI<<EYA<<<<<<<<<<<<<<<<<<<<<<<<<<<<", "1" + line2[1:]]
+
+
+def test_repaired_document_number_is_confirmed_by_the_printed_page():
+    from app import pipeline
+    from app.review import Applicant, apply_mrz_policy
+    lines = _repaired_passport()
+    page = [{"text": "I634619", "score": 0.98}, {"text": "GHARBI", "score": 0.98}, {"text": "EYA", "score": 0.98}]
+    alone = pipeline.analyse_mrz(lines)
+    apply_mrz_policy(alone, 0.99, [], Applicant(), lines)
+    assert alone["document"]["documentNumber"] == "I634619" and alone["document"]["checks"]["document_number"] is False
+    assert any(f["code"] == "mrz_field_repaired" and f["severity"] == "error" for f in alone["flags"])
+    seen = pipeline.analyse_mrz(lines)
+    apply_mrz_policy(seen, 0.99, page, Applicant(), lines)
+    assert seen["document"]["checks"]["document_number"] is True and seen["document"]["repairConfirmedBy"]
+    assert not any(f["code"] == "mrz_checksum_failed" for f in seen["flags"])
+    assert [f["severity"] for f in seen["flags"] if f["code"] == "mrz_field_repaired"] == ["warning"]
+    typed = pipeline.analyse_mrz(lines)
+    apply_mrz_policy(typed, 0.99, [], Applicant(document_number="I634619"), lines)
+    assert typed["document"]["checks"]["document_number"] is True
+    wrong = pipeline.analyse_mrz(lines)
+    apply_mrz_policy(wrong, 0.99, [{"text": "1634619", "score": 0.98}], Applicant(), lines)
+    assert wrong["document"]["checks"]["document_number"] is False          # the page shows the unrepaired reading: no confirmation
+
+
+def test_stray_character_before_the_type_letter_is_dropped():
+    from app.mrz import check_digit, find_mrz_lines, parse_mrz
+    number, birth, expiry = "604387844", "710826", "230301"
+    line2 = (number + str(check_digit(number)) + "USA" + birth + str(check_digit(birth)) + "M" + expiry
+             + str(check_digit(expiry))).ljust(36, "<")
+    line1 = "VDFRATITOV<<ANTON<ANDREYEVICH<<<<<<<"
+    assert parse_mrz([line1, line2]).format == "MRVB"
+    found = find_mrz_lines(["U" + line1[:-1], line2])
+    assert found == [line1, line2]
+    assert find_mrz_lines([line1, line2]) == [line1, line2]
+
+
+def test_one_stray_arabic_letter_does_not_make_a_gulf_card():
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.review import Applicant
+    lines = [{"text": t, "score": 0.95, "box": [[10, 10 + 30 * i], [300, 10 + 30 * i], [300, 30 + 30 * i], [10, 30 + 30 * i]]}
+             for i, t in enumerate(["ENTRY CLEARANCE", "Name", "DOE JANE", "Nationality", "IND", "Date of birth", "24/06/02", "ي"])]
+
+    class Fake:
+        name = "fake"
+        def extract(self, images, hint):
+            return EngineOutput(engine="paddle-ocr", mrz_lines=None, fields={"textLines": lines}, confidence=0.9)
+    status, res = pipeline.run([b"x"], None, Applicant(), Fake())
+    assert status == "failed" and res["code"] == "mrz_not_found"
+
+
+def test_gulf_state_named_in_arabic_only():
+    from app.visual_zone import gulf_evidence
+    assert gulf_evidence([{"text": "المملكة العربية السعودية"}])[0] == {"SAU"}
+    assert gulf_evidence([{"text": "هوية مقيم"}])[0] == {"SAU"}
+    assert gulf_evidence([{"text": "سلطنة عمان"}])[0] == {"OMN"}
+    assert gulf_evidence([{"text": "رقم الهوية"}]) == (set(), True)
+    assert gulf_evidence([{"text": "REPUBLIQUE FRANCAISE"}]) == (set(), False)

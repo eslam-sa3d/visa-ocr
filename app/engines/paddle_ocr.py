@@ -406,8 +406,9 @@ class PaddleOcrEngine:
         with self._infer:
             return self._extract(images, np, Image, ImageOps, deep)
 
-    def mrz_retries(self, images: list[bytes]) -> tuple[list[str] | None, float | None]:
-        """The last-chance MRZ searches on their own, for a page already read with deep=False."""
+    def mrz_retries(self, images: list[bytes], straighten: bool = True) -> tuple[list[str] | None, float | None]:
+        """The last-chance MRZ searches on their own, for a page already read with deep=False. straighten=False leaves out
+        the slowest one (the page straightened and read again several ways), for a page that shows no trace of an MRZ."""
         import numpy as np  # noqa: WPS433
         from PIL import Image, ImageOps  # noqa: WPS433
         if "en" not in self.langs:
@@ -415,7 +416,7 @@ class PaddleOcrEngine:
         with self._infer:
             reader = self._reader("en")
             mrz, conf = self._mrz_from_bottom_band(images, reader, np, Image, ImageOps)
-            if not mrz:
+            if not mrz and straighten:
                 mrz, conf = self._mrz_from_variants(images, reader, np, Image, ImageOps)
             return mrz, conf
 
