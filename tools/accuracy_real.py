@@ -29,17 +29,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 META = ("hint", "type")
 
 
-def run(folder: Path, engine_name: str | None = None) -> dict:
+def run(folder: Path, engine_name: str | None = None, with_form: bool = False, labels_file: Path | None = None) -> dict:
     from app import pipeline
     from app.engines import get_engine, get_engine_by_name
     from app.review import Applicant
-    labels = json.loads((folder / "labels.json").read_text(encoding="utf-8"))
+    labels = json.loads((labels_file or folder / "labels.json").read_text(encoding="utf-8"))
     engine = get_engine_by_name(engine_name) if engine_name else get_engine()
     fields = defaultdict(lambda: {"total": 0, "correct": 0})
     types = defaultdict(lambda: {"documents": 0, "correct": 0, "acceptedWithoutReview": 0})
     wrongly_accepted, unread, docs_correct, accepted = [], [], 0, 0
     for name, truth in sorted(labels.items()):
-        status, result = pipeline.run([(folder / name).read_bytes()], truth.get("hint"), Applicant(), engine)
+        # --with-form: what the portal does in production, sending what the applicant typed. Fields no check digit covers
+        # (name, nationality) are then confirmed by the form instead of waiting for a person.
+        form = Applicant(surname=truth.get("surname"), given_names=truth.get("givenNames"), nationality=truth.get("nationality"),
+                         document_number=truth.get("documentNumber")) if with_form else Applicant()
+        status, result = pipeline.run([(folder / name).read_bytes()], truth.get("hint"), form, engine)
         kind = truth.get("type", "document")
         types[kind]["documents"] += 1
         doc = result.get("document", {}) if status == "done" else {}
@@ -72,8 +76,11 @@ def main() -> None:
     ap.add_argument("folder", type=Path)
     ap.add_argument("--engine")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--labels", type=Path, help="answer file, when it is not labels.json inside the folder")
+    ap.add_argument("--with-form", action="store_true",
+                    help="send the correct name, nationality and number as the application form, as the portal does")
     a = ap.parse_args()
-    report = run(a.folder, a.engine)
+    report = run(a.folder, a.engine, a.with_form, a.labels)
     print(json.dumps(report, indent=2))
     if a.json:
         a.json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -508,7 +508,7 @@ def lines_confidence(lines: list[str] | None, texts: list[str], scores: list) ->
     return round(min(used), 4)
 
 
-def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
+def _find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
     """Locate a block of MRZ lines inside raw OCR output. Exact lengths first, then lines that are a few
     characters off (repaired by adjusting the filler run)."""
     cleaned = [clean_line(l) for l in candidate_lines]
@@ -544,6 +544,18 @@ def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
                     and not re.search(r"[0-9]{4,}", first)):
                 return [first.ljust(size, FILLER), second]
     return None
+
+
+def find_mrz_lines(candidate_lines: list[str]) -> list[str] | None:
+    """The MRZ among lines of OCR text, or None. Also drops a stray character read in front of the document type letter:
+    print beside the zone (a border, sideways text) sometimes lands at the start of line 1 and pushes a filler off its end.
+    The shifted line is taken only when every check digit then passes."""
+    found = _find_mrz_lines(candidate_lines)
+    if found and len(found) == 2 and found[0][:1] not in "PVACI" and found[0][1:2] in "PV" and found[0].endswith(FILLER):
+        shifted = [found[0][1:] + FILLER, found[1]]
+        if check_score(shifted)[1]:
+            return shifted
+    return found
 
 
 _TYPE_LETTERS = {"TD3": "P", "TD1": "ACI", "TD2": "ACIP", "MRVA": "V", "MRVB": "V"}

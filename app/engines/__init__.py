@@ -55,9 +55,24 @@ class AutoEngine:
                 second = None
             if second is not None and second.mrz_lines:
                 return second
+            if second is not None:
+                # not for a card that names a Gulf state or carries a Gulf ID label: those are read from their printed text
+                from ..visual_zone import gulf_evidence
+                named, labelled = gulf_evidence((out.fields or {}).get("textLines") or [])
+                enlarged = None if (named or labelled) else _enlarged_if_small(images)
+                if enlarged:                         # small print (a low-resolution upload): the pair reads it at twice the size
+                    try:
+                        again = get_engine_by_name(EnsembleEngine.name).extract(enlarged, doc_type_hint)
+                    except Exception as exc:  # noqa: BLE001 - an extra look must not lose what was read
+                        log.error("reading the enlarged image failed (%s)", type(exc).__name__)
+                        again = None
+                    if again is not None and again.mrz_lines:
+                        return again
             if staged:
                 try:
-                    out.mrz_lines, out.mrz_confidence = paddle.mrz_retries(images)
+                    # the slowest search (straightening the page) only when something on the page looks like an MRZ
+                    trace = _mrz_trace(out) or (second is not None and _mrz_trace(second))
+                    out.mrz_lines, out.mrz_confidence = paddle.mrz_retries(images, straighten=bool(trace))
                 except Exception as exc:  # noqa: BLE001 - a failed last look must not lose the text already read
                     log.error("PaddleOCR's last MRZ search failed (%s)", type(exc).__name__)
             if second is not None and not out.mrz_lines and not has_text:
@@ -94,6 +109,36 @@ class AutoEngine:
         if s_sec > s_out:
             return second
         return out
+
+
+def _mrz_trace(out) -> bool:
+    """True when some line of the text read from the page looks like part of an MRZ (filler characters in a run of capitals
+    and digits). A page with no such line is very unlikely to carry an MRZ the slow searches could still find."""
+    import re
+    for line in (out.fields or {}).get("textLines") or []:
+        text = re.sub(r"\s+", "", str(line.get("text", ""))).upper()
+        if len(text) >= 12 and text.count("<") >= 2 and re.fullmatch(r"[A-Z0-9<«‹]+", text):
+            return True
+    return False
+
+
+def _enlarged_if_small(images: list[bytes]) -> list[bytes] | None:
+    """The images at twice the size when the largest is a low-resolution upload (long side up to 1300 pixels), else None.
+    An MRZ on such an image has characters about ten pixels tall, below what the readers need."""
+    import io
+    from PIL import Image, ImageOps
+    try:
+        opened = [ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB") for raw in images]
+    except Exception:  # noqa: BLE001 - an image that cannot be opened is reported by the step that reads it
+        return None
+    if not opened or max(max(im.size) for im in opened) > 1300:
+        return None
+    out = []
+    for im in opened:
+        buffer = io.BytesIO()
+        im.resize((im.width * 2, im.height * 2), Image.LANCZOS).save(buffer, format="PNG", compress_level=1)
+        out.append(buffer.getvalue())
+    return out
 
 
 def get_engine() -> Engine:

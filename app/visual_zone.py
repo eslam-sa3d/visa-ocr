@@ -251,7 +251,7 @@ def gulf_evidence(lines: list[dict]) -> tuple[set[str], bool]:
     A number that merely has the right length proves nothing (a European permit number is nine digits too), so a number with no
     check digit of its own is only taken as a Gulf ID when the card itself says so."""
     text = " ".join(str(l.get("text", "")) for l in lines)
-    arabic = normalize_arabic(text)
+    arabic = normalize_arabic(text).replace("ة", "ه")      # teh marbuta is often read (and written) as heh
     named = {code for code, (latin, ar) in _GULF_NAMES.items() if re.search(latin, text, re.I) or any(a in arabic for a in ar)}
     return named, bool(_GULF_ID_LABEL.search(text)) or any(a in arabic for a in _GULF_ID_LABEL_AR)
 

@@ -168,7 +168,9 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             # Without an ID number, labelled fields alone make a card only when the text shows it is a Gulf card (a state's name,
             # a Gulf ID label or Arabic print). The front of a European or American permit has the same English labels.
             named, labelled_gulf = gulf_evidence(text_lines)
-            gulf = bool(named or labelled_gulf or any("\u0600" <= ch <= "\u06ff" for l in text_lines for ch in str(l.get("text", ""))))
+            # one stray Arabic letter read out of background noise is not Arabic print: ask for a few words' worth
+            arabic = sum("\u0600" <= ch <= "\u06ff" for l in text_lines for ch in str(l.get("text", "")))
+            gulf = bool(named or labelled_gulf or arabic >= 8)
             if "idNumber" in doc or (len(found) >= 3 and gulf):
                 a_flags, _ = compare_applicant(doc, applicant)
                 result["flags"] += [f.to_dict() for f in a_flags]
