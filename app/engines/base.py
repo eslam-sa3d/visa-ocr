@@ -17,6 +17,8 @@ class EngineOutput:
     fields: dict = field(default_factory=dict)
     confidence: float | None = None
     mrz_confidence: float | None = None   # lowest OCR score among the MRZ lines (None when the engine gives no scores)
+    # The pages turned upright, when the engine found a photo taken sideways (for another reader to use; never stored).
+    upright_images: list[bytes] | None = None
 
 
 class Engine(Protocol):

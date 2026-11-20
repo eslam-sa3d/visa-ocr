@@ -1071,3 +1071,31 @@ def test_auto_lets_the_second_pair_try_before_paddles_slow_search(monkeypatch):
     pair.found = False
     out = engines.AutoEngine().extract([b"x"], None)
     assert out.engine == "paddle-ocr" and out.mrz_lines == good and calls[:3] == [("paddle", False), ("pair",), ("retries",)]
+
+
+def test_sideways_page_is_turned_before_it_is_read():
+    """A photo taken with the passport turned a quarter: the text boxes are tall, and the way up is the one that reads well."""
+    import numpy as np
+    from app.engines.paddle_ocr import SharedReader
+
+    class Rec:
+        def __init__(self, good_when_flipped):
+            self.good_when_flipped = good_when_flipped
+        def predict(self, crops):
+            # a crop is "the right way up" when its marker pixel sits top-left
+            return [{"rec_text": "X", "rec_score": 0.95 if (c[0, 0, 0] == 255) != self.good_when_flipped else 0.2} for c in crops]
+
+    def crops_for(n):
+        out = []
+        for _ in range(n):
+            c = np.zeros((10, 100, 3), dtype=np.uint8)
+            c[0, 0, 0] = 255
+            out.append(c)
+        return out
+    tall = [np.array([[10 + 30 * i, 10], [30 + 30 * i, 10], [30 + 30 * i, 400], [10 + 30 * i, 400]]) for i in range(5)]
+    wide = [np.array([[10, 10 + 30 * i], [400, 10 + 30 * i], [400, 30 + 30 * i], [10, 30 + 30 * i]]) for i in range(5)]
+    page = np.zeros((500, 500, 3), dtype=np.uint8)
+    assert SharedReader(None, {"en": Rec(False)}, None, None).quarter_turns(page, tall, crops_for(5)) == 1
+    assert SharedReader(None, {"en": Rec(True)}, None, None).quarter_turns(page, tall, crops_for(5)) == 3
+    assert SharedReader(None, {"en": Rec(False)}, None, None).quarter_turns(page, wide, crops_for(5)) == 0      # upright page
+    assert SharedReader(None, {"en": Rec(False)}, None, None).quarter_turns(page, wide + tall[:1], crops_for(6)) == 0

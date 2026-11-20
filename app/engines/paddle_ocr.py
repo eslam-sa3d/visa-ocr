@@ -84,7 +84,7 @@ class SharedReader:
     def __init__(self, detector, recognisers: dict, crop, sort) -> None:
         self.detector, self.recognisers, self.crop, self.sort = detector, recognisers, crop, sort
 
-    def read(self, array, index: int) -> list[dict]:
+    def _detect(self, array) -> tuple[list, list]:
         polys = []
         for res in self.detector.predict(array):
             polys += list(_result_dict(res).get("dt_polys", []))
@@ -94,6 +94,52 @@ class SharedReader:
             if getattr(sub, "size", 0) > 0 and sub.shape[0] > 0 and sub.shape[1] > 0:
                 kept.append(poly)
                 crops.append(sub)
+        return kept, crops
+
+    @staticmethod
+    def _score(result) -> float:
+        score = _result_dict(result).get("rec_score")
+        score = score[0] if isinstance(score, (list, tuple)) and score else score
+        return float(score or 0)
+
+    def quarter_turns(self, array, kept: list, crops: list) -> int:
+        """0 when the page is upright; otherwise how many quarter turns (anticlockwise, as numpy.rot90 counts) set it upright.
+        A photo taken with the document turned has its text running up or down the page. Which of the two is settled by
+        reading the longest few lines both ways up: the right way scores far higher."""
+        tall = wide = 0.0
+        shaped = []
+        for poly, sub in zip(kept, crops):
+            xs, ys = [float(p[0]) for p in poly], [float(p[1]) for p in poly]
+            w, h = max(xs) - min(xs), max(ys) - min(ys)
+            if max(w, h) >= 3 * max(1.0, min(w, h)):          # only boxes shaped like a line of text say anything
+                if h > w:
+                    tall += h
+                    shaped.append((h, sub))
+                else:
+                    wide += w
+        if not shaped or tall <= 1.5 * wide:
+            return 0
+        rec = self.recognisers.get("en") or next(iter(self.recognisers.values()))
+        sample = [sub for _, sub in sorted(shaped, key=lambda x: -x[0])[:4]]
+        as_cut = sum(self._score(r) for r in rec.predict(sample))
+        flipped = sum(self._score(r) for r in rec.predict([sub[::-1, ::-1].copy() for sub in sample]))
+        # the cutter lays a tall box flat by turning it a quarter anticlockwise: if that reads well, the page needs the same
+        return 1 if as_cut >= flipped else 3
+
+    def read_upright(self, array, index: int, np) -> tuple[list[dict], object]:
+        """Read a page, turning it upright first when it was photographed sideways. Returns the lines and the page as read."""
+        kept, crops = self._detect(array)
+        turns = self.quarter_turns(array, kept, crops) if crops else 0
+        if turns:
+            array = np.ascontiguousarray(np.rot90(array, turns))
+            kept, crops = self._detect(array)
+        return self._recognise(kept, crops, index), array
+
+    def read(self, array, index: int) -> list[dict]:
+        kept, crops = self._detect(array)
+        return self._recognise(kept, crops, index)
+
+    def _recognise(self, kept: list, crops: list, index: int) -> list[dict]:
         lines: list[dict] = []
         if not crops:
             return lines
@@ -374,51 +420,122 @@ class PaddleOcrEngine:
             return mrz, conf
 
     def _extract(self, images, np, Image, ImageOps, deep: bool = True) -> EngineOutput:
+        given = images
         lines: list[dict] | None = None
+        readers: dict = {}
         shared = self._shared_reader()
         if shared is not None:
             try:
                 lines = []
+                images = list(images)
                 for index, raw in enumerate(images):
-                    img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-                    lines += shared[0].read(np.array(img), index)
-                used_models = shared[1]
-                readers = {}                                  # the per-language pipelines load only if the MRZ search needs one
+                    array = self._array(raw, np, Image, ImageOps)
+                    page_lines, read_as = shared[0].read_upright(array, index, np)
+                    lines += page_lines
+                    if read_as is not array:                  # photographed sideways: later steps work on the upright page
+                        buffer = io.BytesIO()
+                        Image.fromarray(read_as).save(buffer, format="PNG", compress_level=1)
+                        images[index] = buffer.getvalue()
+                used_models = shared[1]                       # the per-language pipelines load only if the MRZ search needs one
             except Exception as exc:  # noqa: BLE001 - the faster path must never cost a reading
                 log.error("shared text detection failed (%s); using one pipeline per language from now on", type(exc).__name__)
-                self._shared_off, lines = True, None
+                self._shared_off, lines, shared = True, None, None
         if lines is None:
-            lines, readers, used_models = self._read_per_language(images, np, Image, ImageOps)
-        return self._finish(images, lines, readers, used_models, np, Image, ImageOps, deep)
+            readers = {lang: self._reader(lang) for lang in self.langs}
+            used_models = dict(self._used_models)             # the models that read THIS document
+            lines = []
+            for index, raw in enumerate(images):
+                lines += self._read_per_language(self._array(raw, np, Image, ImageOps), index, readers)
 
-    def _read_per_language(self, images, np, Image, ImageOps) -> tuple[list[dict], dict, dict]:
-        """The usual path: one PaddleOCR pipeline per language, each finding and reading the text of every page."""
-        readers = {lang: self._reader(lang) for lang in self.langs}
-        used_models = dict(self._used_models)                 # the models that read THIS document
-        lines: list[dict] = []
+        if shared is None:      # the shared reader turns sideways pages itself, cheaply; here each way is read and compared
+            images, lines = self._turn_upright(list(images), lines, lambda array, index: self._read_per_language(
+                array, index, readers), np, Image, ImageOps)
+        out = self._finish(images, lines, readers, used_models, np, Image, ImageOps, deep)
+        if any(a is not b for a, b in zip(images, given)):
+            out.upright_images = list(images)
+        return out
+
+    @staticmethod
+    def _array(raw: bytes, np, Image, ImageOps):
+        return np.array(ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB"))
+
+    @staticmethod
+    def _sideways(lines: list[dict]) -> bool:
+        """True when most of the text on a page runs up or down it: the photo was taken with the document turned a quarter."""
+        tall = wide = 0.0
+        for l in lines:
+            box = l.get("box") or []
+            if len(box) != 4:
+                continue
+            w = max(p[0] for p in box) - min(p[0] for p in box)
+            h = max(p[1] for p in box) - min(p[1] for p in box)
+            if max(w, h) >= 3 * max(1, min(w, h)):            # only boxes shaped like a line of text say anything
+                if h > w:
+                    tall += h
+                else:
+                    wide += w
+        return tall > 1.5 * wide and tall > 0
+
+    @staticmethod
+    def _page_quality(lines: list[dict]) -> tuple:
+        """How well a page was read: an MRZ with every check digit passing first, then check digits, then confident text."""
+        mrz = find_mrz_lines([l["text"] for l in lines])
+        passing, perfect = check_score(mrz)
+        good = sum(len(l["text"]) for l in lines if (l["score"] or 0) >= 0.9)
+        return (perfect, passing, good)
+
+    def _turn_upright(self, images: list[bytes], lines: list[dict], read, np, Image, ImageOps) -> tuple[list[bytes], list[dict]]:
+        """Phone photos are often taken with the passport turned a quarter and carry no orientation tag. Text read sideways
+        comes out one line right and the next wrong. When a page's text runs up the page, read it turned each way and keep
+        the better reading; everything after this (MRZ searches, printed-text fields) then works on the upright page."""
         for index, raw in enumerate(images):
+            mine = [l for l in lines if l["image"] == index]
+            if not self._sideways(mine):
+                continue
             img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-            array = np.array(img)
-            for lang, reader in readers.items():
-                for res in reader.predict(array):
-                    data = _result_dict(res)
-                    texts = data.get("rec_texts", [])
-                    scores = data.get("rec_scores", [])
-                    boxes = data.get("rec_polys", data.get("dt_polys", []))
-                    for i, text in enumerate(texts):
-                        if not str(text).strip():
-                            continue
-                        box = boxes[i] if i < len(boxes) else []
-                        lines.append({
-                            "image": index,
-                            "lang": lang,
-                            "text": str(text),
-                            "normalizedText": to_ascii_digits(str(text)),
-                            "script": script_of(str(text)),
-                            "score": round(float(scores[i]), 4) if i < len(scores) else None,
-                            "box": [[int(x), int(y)] for x, y in (box.tolist() if hasattr(box, "tolist") else box)],
-                        })
-        return lines, readers, used_models
+            best, best_quality, best_img = mine, self._page_quality(mine), None
+            for angle in (90, 270):
+                turned = img.rotate(angle, expand=True)
+                try:
+                    candidate = read(np.array(turned), index)
+                except Exception as exc:  # noqa: BLE001 - a failed extra look must not lose the first reading
+                    log.error("reading the turned page failed (%s)", type(exc).__name__)
+                    continue
+                quality = self._page_quality(candidate)
+                if quality > best_quality:
+                    best, best_quality, best_img = candidate, quality, turned
+                if quality[0]:
+                    break
+            if best_img is not None:
+                buffer = io.BytesIO()
+                best_img.save(buffer, format="PNG")
+                images[index] = buffer.getvalue()
+                lines = [l for l in lines if l["image"] != index] + best
+        return images, lines
+
+    def _read_per_language(self, array, index: int, readers: dict) -> list[dict]:
+        """The usual path: one PaddleOCR pipeline per language, each finding and reading the text of the page."""
+        lines: list[dict] = []
+        for lang, reader in readers.items():
+            for res in reader.predict(array):
+                data = _result_dict(res)
+                texts = data.get("rec_texts", [])
+                scores = data.get("rec_scores", [])
+                boxes = data.get("rec_polys", data.get("dt_polys", []))
+                for i, text in enumerate(texts):
+                    if not str(text).strip():
+                        continue
+                    box = boxes[i] if i < len(boxes) else []
+                    lines.append({
+                        "image": index,
+                        "lang": lang,
+                        "text": str(text),
+                        "normalizedText": to_ascii_digits(str(text)),
+                        "script": script_of(str(text)),
+                        "score": round(float(scores[i]), 4) if i < len(scores) else None,
+                        "box": [[int(x), int(y)] for x, y in (box.tolist() if hasattr(box, "tolist") else box)],
+                    })
+        return lines
 
     def _finish(self, images, lines: list[dict], readers: dict, used_models: dict, np, Image, ImageOps,
                 deep: bool = True) -> EngineOutput:
