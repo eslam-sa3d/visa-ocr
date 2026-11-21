@@ -38,7 +38,9 @@ def run(folder: Path, engine_name: str | None = None, with_form: bool = False, l
     fields = defaultdict(lambda: {"total": 0, "correct": 0})
     types = defaultdict(lambda: {"documents": 0, "correct": 0, "acceptedWithoutReview": 0})
     wrongly_accepted, unread, docs_correct, accepted = [], [], 0, 0
-    for name, truth in sorted(labels.items()):
+    for done_count, (name, truth) in enumerate(sorted(labels.items()), 1):
+        if done_count % 20 == 0:
+            print(f"  {done_count}/{len(labels)}", file=sys.stderr, flush=True)
         # --with-form: what the portal does in production, sending what the applicant typed. Fields no check digit covers
         # (name, nationality) are then confirmed by the form instead of waiting for a person.
         form = Applicant(surname=truth.get("surname"), given_names=truth.get("givenNames"), nationality=truth.get("nationality"),
