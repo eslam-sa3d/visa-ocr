@@ -7,6 +7,7 @@
 Agreement is only trusted when every check digit passes: two engines can share a mistake that the check digits cannot see."""
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import threading
@@ -201,8 +202,9 @@ class EnsembleEngine:
                 took[name] = round(time.monotonic() - t0, 2)
 
         pool = _readers_pool()
-        ft = pool.submit(timed, "tesseract", self.tesseract)
-        fr = pool.submit(timed, "rapidocr", self.rapid)
+        # each reader runs in a copy of this call's context, so a limit set with config.limited_read() reaches it
+        ft = pool.submit(contextvars.copy_context().run, timed, "tesseract", self.tesseract)
+        fr = pool.submit(contextvars.copy_context().run, timed, "rapidocr", self.rapid)
         # Either reader can be missing (not installed) or fail on one image (a Tesseract timeout, a decoder error). The other
         # one's reading still stands; it is then a single reading, so it carries no agreement and goes to review as usual.
         results, failures = {}, {}

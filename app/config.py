@@ -1,6 +1,8 @@
 """Runtime settings, read from environment variables at call time (so tests and operators can change them)."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 
 
@@ -77,13 +79,36 @@ def tesseract_lang() -> str: return os.environ.get("TESSERACT_LANG", "").strip()
 def tesseract_data_dir() -> str: return os.environ.get("TESSERACT_DATA_DIR", "").strip()
 
 
+_read_limit: contextvars.ContextVar[float] = contextvars.ContextVar("read_limit", default=0.0)
+
+
 def ocr_deadline() -> float:
     """Hard limit in seconds for one read (0 = off). When set, each reader stops starting new attempts in time to answer by the
-    deadline and returns the best reading it has; a reading that is not perfect then goes to review as usual."""
+    deadline and returns the best reading it has; a reading that is not perfect then goes to review as usual.
+    Inside limited_read() the tighter of the two limits applies."""
     try:
-        return max(0.0, float(os.environ.get("OCR_DEADLINE_SECONDS", "0")))
+        base = max(0.0, float(os.environ.get("OCR_DEADLINE_SECONDS", "0")))
     except ValueError:
-        return 0.0
+        base = 0.0
+    inner = _read_limit.get()
+    return min(base, inner) if base and inner else base or inner
+
+
+@contextlib.contextmanager
+def limited_read(seconds: float):
+    """Give the readers called inside this block a hard limit (0 = none), for this thread of work only."""
+    token = _read_limit.set(max(0.0, seconds))
+    try:
+        yield
+    finally:
+        _read_limit.reset(token)
+
+
+def handover_seconds() -> float:
+    """Limit for the Tesseract + RapidOCR pair when "auto" calls it after PaddleOCR has already read the page (0 = none).
+    PaddleOCR has the page text and has turned a sideways photo upright by then, so the pair only has to look for an MRZ:
+    without a limit it also searches the page turned each way and reads all the printed text again."""
+    return max(0.0, _float("OCR_HANDOVER_SECONDS", 8.0))
 
 
 def work_max_side() -> int:

@@ -1167,3 +1167,32 @@ def test_gulf_state_named_in_arabic_only():
     assert gulf_evidence([{"text": "سلطنة عمان"}])[0] == {"OMN"}
     assert gulf_evidence([{"text": "رقم الهوية"}]) == (set(), True)
     assert gulf_evidence([{"text": "REPUBLIQUE FRANCAISE"}]) == (set(), False)
+
+
+def test_holder_nationality_does_not_hide_a_self_checking_number():
+    """A UAE card held by a Saudi national prints "Saudi Arabia" as the nationality; the Emirates ID still proves itself."""
+    from app.gcc_ids import luhn_ok
+    from app.visual_zone import parse_gcc_id
+    n = next(f"78419801234567{d}" for d in "0123456789" if luhn_ok(f"78419801234567{d}"))
+    doc = parse_gcc_id(_vz_lines("Resident Identity Card", "ID Number", n, "Nationality", "Saudi Arabia"))["document"]
+    assert doc["kind"] == "uae_emirates_id" and doc["idNumber"].replace("-", "") == n
+
+
+def test_read_limit_reaches_readers_running_in_the_pool():
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+    from app import config
+    with ThreadPoolExecutor(1) as pool:
+        with config.limited_read(3):
+            assert config.ocr_deadline() == 3
+            assert pool.submit(contextvars.copy_context().run, config.ocr_deadline).result() == 3
+        assert config.ocr_deadline() == 0 and pool.submit(config.ocr_deadline).result() == 0
+
+
+def test_tighter_of_two_limits_applies(monkeypatch):
+    from app import config
+    monkeypatch.setenv("OCR_DEADLINE_SECONDS", "2")
+    with config.limited_read(8):
+        assert config.ocr_deadline() == 2
+    with config.limited_read(1):
+        assert config.ocr_deadline() == 1

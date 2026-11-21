@@ -50,7 +50,10 @@ class AutoEngine:
         has_text = bool(out.fields.get("textLines"))
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
             try:
-                second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
+                # the page text is in hand when PaddleOCR read something: the pair then only looks for an MRZ, within a limit
+                from .. import config
+                with config.limited_read(config.handover_seconds() if has_text else 0):
+                    second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
             except EngineUnavailable:
                 second = None
             if second is not None and second.mrz_lines:
@@ -83,7 +86,8 @@ class AutoEngine:
             return out
 
         try:
-            second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
+            with config.limited_read(config.handover_seconds()):
+                second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except EngineUnavailable:
             return out
         if not second.mrz_lines:
