@@ -165,113 +165,162 @@ def cycle(args, runner=run_step, now: datetime | None = None) -> dict:
                 preds.unlink(missing_ok=True)
 
 
+class _Run:
+    """One training cycle: its settings, the state file, and the report being written."""
+
+    def __init__(self, args, runner, now: datetime, work: Path) -> None:
+        self.args, self.runner, self.now, self.work = args, runner, now, work
+        self.state_file = work / "state.json"
+        self.state = (json.loads(self.state_file.read_text(encoding="utf-8")) if self.state_file.exists()
+                      else {"trainedLines": 0})
+        self.stamp = now.strftime("%Y%m%d-%H%M")
+        self.run_dir = work / self.stamp
+        self.data_dir, self.out_dir = self.run_dir / "data", self.run_dir / "out"
+        self.golden_dir = getattr(args, "golden_dir", None)
+        self.seed = int(getattr(args, "seed", 1) or 1)
+        self.report: dict = {"startedAt": now.isoformat(), "lang": args.lang, "run": self.stamp}
+        self.lines = 0
+        self.reg: Registry | None = None
+
+    def save_state(self) -> None:
+        self.state_file.write_text(json.dumps(self.state) + "\n", encoding="utf-8")
+
+    def finish(self, outcome: str, **extra) -> dict:
+        self.report.update(outcome=outcome, **extra)
+        text = json.dumps(self.report, indent=2, ensure_ascii=False) + "\n"
+        (self.work / "report.json").write_text(text, encoding="utf-8")                # the latest run, where it always was
+        if self.run_dir.is_dir():
+            (self.run_dir / "report.json").write_text(text, encoding="utf-8")         # kept with the run
+        with open(self.work / "history.jsonl", "a", encoding="utf-8") as fh:          # every run, one line each
+            fh.write(json.dumps(self.report, ensure_ascii=False) + "\n")
+        print(json.dumps(self.report, ensure_ascii=False))
+        return self.report
+
+    def done(self, outcome: str, **extra) -> dict:
+        """End a cycle that produced a candidate: these corrections are now counted as trained on."""
+        self.state["trainedLines"] = self.lines
+        self.save_state()
+        removed = _prune_candidates(self.reg, self.args.lang, int(getattr(self.args, "keep_candidates", 3)), self.work)
+        return self.finish(outcome, **({"prunedCandidates": removed} if removed else {}), **extra)
+
+
 def _cycle(args, runner, now: datetime, work: Path) -> dict:
-    state_file = work / "state.json"
-    state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {"trainedLines": 0}
-    stamp = now.strftime("%Y%m%d-%H%M")
-    run_dir = work / stamp
-    report: dict = {"startedAt": now.isoformat(), "lang": args.lang, "run": stamp}
+    run = _Run(args, runner, now, work)
+    stopped = _count_new_lines(run)
+    if stopped:
+        return stopped
+    stats, stopped = _prepare_data(run)
+    if stopped:
+        return stopped
+    data_id = stats.get("datasetSha256") or f"lines:{run.lines}"
+    # The same data that already failed is not trained again and again by the timer: a person looks at it first.
+    failed = run.state.get("failed") or {}
+    if failed.get("dataset") == data_id and failed.get("attempts", 0) >= MAX_ATTEMPTS_PER_DATASET:
+        return run.finish("skipped_training_failed_before_on_this_data", attempts=failed["attempts"], lastError=failed.get("error"))
 
-    def save_state() -> None:
-        state_file.write_text(json.dumps(state) + "\n", encoding="utf-8")
+    run.reg = Registry(args.models_dir)
+    current = next((m for m in run.reg.models() if m.active and m.task == "text_recognition" and m.lang == args.lang), None)
+    start_from, stopped = _train(run, current, data_id, failed)
+    if stopped:
+        return stopped
+    model_id, target = _install_candidate(run)
+    return _judge(run, current, model_id, target, data_id, start_from)
 
-    def finish(outcome: str, **extra) -> dict:
-        report.update(outcome=outcome, **extra)
-        text = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
-        (work / "report.json").write_text(text, encoding="utf-8")                # the latest run, where it always was
-        if run_dir.is_dir():
-            (run_dir / "report.json").write_text(text, encoding="utf-8")         # kept with the run
-        with open(work / "history.jsonl", "a", encoding="utf-8") as fh:          # every run, one line each
-            fh.write(json.dumps(report, ensure_ascii=False) + "\n")
-        print(json.dumps(report, ensure_ascii=False))
-        return report
 
-    lines = count_corrections(args.store_dir)
-    if lines < state["trainedLines"]:           # the retention purge removed lines: count new ones from the present total
-        state["trainedLines"] = lines
-        save_state()
-    report["correctedLines"], report["newLines"] = lines, lines - state["trainedLines"]
-    if report["newLines"] < args.min_new:
-        return finish("skipped_not_enough_new_lines", needed=args.min_new)
+def _count_new_lines(run: _Run) -> dict | None:
+    """Count approved corrections; returns the finished report when there are too few new ones to train on."""
+    args, state = run.args, run.state
+    run.lines = count_corrections(args.store_dir)
+    if run.lines < state["trainedLines"]:       # the retention purge removed lines: count new ones from the present total
+        state["trainedLines"] = run.lines
+        run.save_state()
+    run.report["correctedLines"], run.report["newLines"] = run.lines, run.lines - state["trainedLines"]
+    if run.report["newLines"] < args.min_new:
+        return run.finish("skipped_not_enough_new_lines", needed=args.min_new)
+    return None
 
-    golden_dir = getattr(args, "golden_dir", None)
-    seed = int(getattr(args, "seed", 1) or 1)
-    data_dir, out_dir = run_dir / "data", run_dir / "out"
-    cmd = [sys.executable, HERE / "prepare_dataset.py", "--store-dir", args.store_dir, "--out", data_dir, "--lang", args.lang,
-           "--seed", seed]
-    if golden_dir:
-        cmd += ["--golden-dir", golden_dir]
+
+def _prepare_data(run: _Run) -> tuple[dict, dict | None]:
+    """Build the dataset. Returns (its statistics, the finished report when there is too little real validation data)."""
+    args = run.args
+    cmd = [sys.executable, HERE / "prepare_dataset.py", "--store-dir", args.store_dir, "--out", run.data_dir, "--lang", args.lang,
+           "--seed", run.seed]
+    if run.golden_dir:
+        cmd += ["--golden-dir", run.golden_dir]
     if args.synth_dir:
         cmd += ["--synth-dir", *args.synth_dir]
     if args.dict:
         cmd += ["--dict", args.dict]
-    runner(cmd)
-    stats = json.loads((data_dir / "stats.json").read_text(encoding="utf-8"))
-    report["dataset"] = {k: stats.get(k) for k in ("realTrain", "realVal", "synthTrain", "skipped", "datasetSha256")}
+    run.runner(cmd)
+    stats = json.loads((run.data_dir / "stats.json").read_text(encoding="utf-8"))
+    run.report["dataset"] = {k: stats.get(k) for k in ("realTrain", "realVal", "synthTrain", "skipped", "datasetSha256")}
     if (stats.get("realVal") or 0) < args.min_val:
-        return finish("skipped_too_few_real_validation_lines", needed=args.min_val)
+        return stats, run.finish("skipped_too_few_real_validation_lines", needed=args.min_val)
+    return stats, None
 
-    # The same data that already failed is not trained again and again by the timer: a person looks at it first.
-    failed = state.get("failed") or {}
-    data_id = stats.get("datasetSha256") or f"lines:{lines}"
-    if failed.get("dataset") == data_id and failed.get("attempts", 0) >= MAX_ATTEMPTS_PER_DATASET:
-        return finish("skipped_training_failed_before_on_this_data", attempts=failed["attempts"], lastError=failed.get("error"))
 
-    reg = Registry(args.models_dir)
-    current = next((m for m in reg.models() if m.active and m.task == "text_recognition" and m.lang == args.lang), None)
-    env = {**os.environ, "DATA_DIR": str(data_dir), "OUT_DIR": str(out_dir), "SEED": str(seed),
+def _train(run: _Run, current, data_id: str, failed: dict) -> tuple[str, dict | None]:
+    """Run the fine-tuning step. Returns (what it started from, the finished report when training failed)."""
+    args, state = run.args, run.state
+    env = {**os.environ, "DATA_DIR": str(run.data_dir), "OUT_DIR": str(run.out_dir), "SEED": str(run.seed),
            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
     start_from = "pretrained"
     if getattr(args, "continue_from_current", False) and current is not None:
-        ckpt = work / "checkpoints" / current.id / "best_accuracy"
+        ckpt = run.work / "checkpoints" / current.id / "best_accuracy"
         if ckpt.with_suffix(".pdparams").is_file():
             # Learning carries over from the model in use, so it is not limited to the corrections still inside the
             # retention period. The golden set is what guards against forgetting older document types.
             digest = hashlib.sha256(ckpt.with_suffix(".pdparams").read_bytes()).hexdigest()
             env.update(PRETRAINED=str(ckpt), PRETRAINED_SHA256=digest)
             start_from = current.id
-    report["training"] = {"startFrom": start_from, "seed": seed, "versions": _versions(),
-                          "settings": {k: env.get(k) for k in ("BASE_CONFIG", "EPOCHS", "BATCH", "EVAL_STEP", "USE_GPU")},
-                          "pretrained": Path(env["PRETRAINED"]).name if env.get("PRETRAINED") else None}
+    run.report["training"] = {"startFrom": start_from, "seed": run.seed, "versions": _versions(),
+                              "settings": {k: env.get(k) for k in ("BASE_CONFIG", "EPOCHS", "BATCH", "EVAL_STEP", "USE_GPU")},
+                              "pretrained": Path(env["PRETRAINED"]).name if env.get("PRETRAINED") else None}
     try:
-        runner(["bash", HERE / "finetune.sh"], env)
+        run.runner(["bash", HERE / "finetune.sh"], env)
     except Exception as exc:  # noqa: BLE001 - whatever stopped the training step, record it and stop this cycle
         state["failed"] = {"dataset": data_id, "attempts": (failed.get("attempts", 0) + 1) if failed.get("dataset") == data_id else 1,
-                           "error": type(exc).__name__, "at": now.isoformat()}
-        save_state()
-        return finish("training_failed", error=type(exc).__name__, attempts=state["failed"]["attempts"])
+                           "error": type(exc).__name__, "at": run.now.isoformat()}
+        run.save_state()
+        return start_from, run.finish("training_failed", error=type(exc).__name__, attempts=state["failed"]["attempts"])
     state.pop("failed", None)
+    return start_from, None
 
-    model_id = f"{args.lang}_rec_auto_{stamp}"
-    target = reg.base / model_id
+
+def _install_candidate(run: _Run) -> tuple[str, Path]:
+    """Copy the trained model into the models folder (not yet registered) and keep its checkpoint for a later run."""
+    model_id = f"{run.args.lang}_rec_auto_{run.stamp}"
+    target = run.reg.base / model_id
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(out_dir / "inference", target)
-    best = out_dir / "train" / "best_accuracy.pdparams"
+    shutil.copytree(run.out_dir / "inference", target)
+    best = run.out_dir / "train" / "best_accuracy.pdparams"
     if best.is_file():                               # kept so a later run can continue from this model
-        keep_dir = work / "checkpoints" / model_id
+        keep_dir = run.work / "checkpoints" / model_id
         keep_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for part in (out_dir / "train").glob("best_accuracy.*"):
+        for part in (run.out_dir / "train").glob("best_accuracy.*"):
             shutil.copy2(part, keep_dir / part.name)
+    return model_id, target
 
-    def register(metrics_file: Path | None, activate: bool) -> None:
-        cmd = [sys.executable, HERE / "register_model.py", "--id", model_id, "--task", "text_recognition", "--lang", args.lang,
-               "--version", f"auto-{stamp}", "--path", model_id, "--arch", args.arch, "--replace",
-               "--note", f"auto_train {stamp}: {lines} approved lines, dataset {str(data_id)[:12]}, from {start_from}"]
-        if metrics_file:
-            cmd += ["--metrics", metrics_file]
-        if args.models_dir:
-            cmd += ["--models-dir", args.models_dir]
-        if activate:
-            cmd.append("--activate")
-        runner(cmd)
 
-    def done(outcome: str, **extra) -> dict:
-        state["trainedLines"] = lines
-        save_state()
-        removed = _prune_candidates(reg, args.lang, int(getattr(args, "keep_candidates", 3)), work)
-        return finish(outcome, **({"prunedCandidates": removed} if removed else {}), **extra)
+def _register(run: _Run, model_id: str, data_id: str, start_from: str, metrics_file: Path | None, activate: bool) -> None:
+    args = run.args
+    cmd = [sys.executable, HERE / "register_model.py", "--id", model_id, "--task", "text_recognition", "--lang", args.lang,
+           "--version", f"auto-{run.stamp}", "--path", model_id, "--arch", args.arch, "--replace",
+           "--note", f"auto_train {run.stamp}: {run.lines} approved lines, dataset {str(data_id)[:12]}, from {start_from}"]
+    if metrics_file:
+        cmd += ["--metrics", metrics_file]
+    if args.models_dir:
+        cmd += ["--models-dir", args.models_dir]
+    if activate:
+        cmd.append("--activate")
+    run.runner(cmd)
 
+
+def _judge(run: _Run, current, model_id: str, target: Path, data_id: str, start_from: str) -> dict:
+    """Score the candidate and the model in use on the golden set, register the candidate, and activate it only if the gate
+    passes and activation was asked for."""
+    args, report, golden_dir, run_dir = run.args, run.report, run.golden_dir, run.run_dir
     report["candidate"] = {"id": model_id}
     how_to = f"python training/register_model.py --activate-existing {model_id}"
     # val_real.txt chose the checkpoint during training, so it cannot also judge the result. Only the golden set can: lines
@@ -280,12 +329,13 @@ def _cycle(args, runner, now: datetime, work: Path) -> dict:
     golden_lines = sum(1 for ln in labels.read_text(encoding="utf-8").splitlines() if "\t" in ln) if labels and labels.is_file() else 0
     min_golden = int(getattr(args, "min_golden", 200))
     if golden_lines < min_golden:
-        register(None, False)
-        return done("candidate_built_no_golden_set" if not golden_lines else "candidate_built_golden_set_too_small",
-                    goldenLines=golden_lines, needed=min_golden, approve=how_to)
+        _register(run, model_id, data_id, start_from, None, False)
+        return run.done("candidate_built_no_golden_set" if not golden_lines else "candidate_built_golden_set_too_small",
+                        goldenLines=golden_lines, needed=min_golden, approve=how_to)
 
-    new = score(labels, golden_dir, args.arch, target, run_dir, "candidate", runner)
-    old = score(labels, golden_dir, current.arch or args.arch, reg.full_path(current), run_dir, "current", runner) if current else None
+    new = score(labels, golden_dir, args.arch, target, run_dir, "candidate", run.runner)
+    old = (score(labels, golden_dir, current.arch or args.arch, run.reg.full_path(current), run_dir, "current", run.runner)
+           if current else None)
     report["candidate"].update(cer=new.get("cer"), exactMatch=new.get("exactMatch"))
     report["current"] = {"id": current.id, "cer": old.get("cer"), "exactMatch": old.get("exactMatch")} if current else None
     reasons = gate(new, old, args.min_gain)
@@ -294,15 +344,15 @@ def _cycle(args, runner, now: datetime, work: Path) -> dict:
                       "byScript": {"candidate": new.get("byScript"), "current": (old or {}).get("byScript")},
                       "byGroup": {"candidate": new.get("byGroup"), "current": (old or {}).get("byGroup")}}
     if current and old and old.get("cer") is not None:      # record the current model's score on the golden set
-        runner([sys.executable, HERE / "register_model.py", "--set-metrics", current.id, "--metrics", run_dir / "metrics_current.json",
-                *(["--models-dir", args.models_dir] if args.models_dir else [])])
+        run.runner([sys.executable, HERE / "register_model.py", "--set-metrics", current.id, "--metrics", run_dir / "metrics_current.json",
+                    *(["--models-dir", args.models_dir] if args.models_dir else [])])
     activate = bool(better and args.activate)
-    register(run_dir / "metrics_candidate.json", activate)
+    _register(run, model_id, data_id, start_from, run_dir / "metrics_candidate.json", activate)
     if not better:
-        return done("candidate_not_better_kept_current")
-    return done("activated" if activate else "candidate_better_waiting_for_approval",
-                approve=None if activate else how_to,
-                undo=f"python training/register_model.py --rollback --task text_recognition --lang {args.lang}" if activate else None)
+        return run.done("candidate_not_better_kept_current")
+    return run.done("activated" if activate else "candidate_better_waiting_for_approval",
+                    approve=None if activate else how_to,
+                    undo=f"python training/register_model.py --rollback --task text_recognition --lang {args.lang}" if activate else None)
 
 
 MAX_ATTEMPTS_PER_DATASET = 2

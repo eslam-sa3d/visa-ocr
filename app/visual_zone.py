@@ -257,11 +257,11 @@ def gulf_evidence(lines: list[dict]) -> tuple[set[str], bool]:
 
 
 def _number_fits_card(info: dict, named: set[str], labelled_gulf: bool) -> bool:
+    if info["kind"] in ("uae_emirates_id", "kuwait_civil_id") and info["valid"]:
+        return True         # these two prove themselves; a state named on the card may only be the holder's nationality
     if named:
         return info["country"] in named            # a Kuwaiti card does not carry a Bahraini number
-    if labelled_gulf:
-        return True
-    return info["kind"] in ("uae_emirates_id", "kuwait_civil_id") and info["valid"]     # these two prove themselves
+    return labelled_gulf
 
 
 def _find_other_gcc_number(lines, labelled, named=frozenset(), labelled_gulf=True):
