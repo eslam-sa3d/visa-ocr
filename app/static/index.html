@@ -144,7 +144,7 @@ function errText(body) {
 function showError(message, code) {
   $("#result").hidden = false;
   const out = $("#out"); out.replaceChildren();
-  out.append(el("div", { className: "banner review" }, "Could not read the document"));
+  out.append(el("div", { className: "banner review" }, code === "image_unclear" || code === "mrz_not_found" ? "Please take the photo again" : "Could not read the document"));
   out.append(el("p", {}, message));
   const tips = { unauthorized: "Enter a valid API key above.", rate_limited: "Too many requests; wait a moment.", busy: "The service is busy; try again shortly.",
     invalid_image: "The file is not a readable image.", type_mismatch: "The file content does not match its type.",
@@ -159,6 +159,7 @@ function showAnalysis(res) {
   const doc = res.document;
   out.append(el("div", { className: "banner " + (res.needsReview ? "review" : "ok") },
     res.needsReview ? "Needs human review" : "Looks good: all checks passed"));
+  if (res.retake && res.retake.recommended) out.append(el("p", { className: "fail", style: "margin:.4rem 0" }, el("b", {}, "Please take the photo again. "), res.retake.message));
   if (res.needsReview) {
     const why = el("ul");
     res.flags.filter((f) => f.severity === "error").forEach((f) => why.append(el("li", { className: "fail" }, REASONS[f.code] || f.message)));

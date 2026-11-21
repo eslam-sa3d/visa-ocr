@@ -142,10 +142,57 @@ No MRZ found in the image (job status `failed`):
   "result": null,
   "error": {
     "code": "mrz_not_found",
-    "message": "No MRZ found. Ask the applicant to retake the photo."
+    "message": "No MRZ and no ID-card fields could be read. For a passport or visa, retake the photo flat and sharp with the two long lines of '<' at the bottom fully visible. For a card, include the whole front.",
+    "retake": {
+      "recommended": true,
+      "reasons": ["not_found"],
+      "message": "The document could not be read from this photo. Take the photo again: show the page with the two long lines of letters and '<' (for a card, the side that has them), flat, in focus and in good light, filling the frame."
+    }
   }
 }
 ```
+
+### Asking the applicant for another photo
+
+Whenever the applicant should take the photo again, the response carries a `retake` block. **Show `retake.message` to the applicant.** It appears in three places:
+
+| Where | When | Job status |
+|---|---|---|
+| `error.retake`, code `image_unclear` | The photo is plainly unusable (blurred, too dark, washed out, too small, blank). Turned back before any reading, in milliseconds. | `failed` |
+| `error.retake`, code `mrz_not_found` or `image_unclear` | Nothing could be read from the photo. | `failed` |
+| `result.retake` | An MRZ was read but a check digit fails, or a card's ID number could not be read. The reading is still returned for the reviewer. | `done`, `needsReview: true` |
+
+`retake.reasons` lists why, most serious first: `blurred`, `too_dark`, `too_bright`, `low_contrast`, `too_small`, `mrz_unclear`, `card_unclear`, `not_found`. A reading whose check digits all pass never carries `retake`, however the photo looks.
+
+Unusable photo (job status `failed`):
+
+```json
+{
+  "status": "failed",
+  "result": null,
+  "error": {
+    "code": "image_unclear",
+    "message": "The photo is blurred. Hold the phone steady, wait for it to focus on the document, and take the photo again.",
+    "retake": {"recommended": true, "reasons": ["blurred"], "message": "The photo is blurred. Hold the phone steady, wait for it to focus on the document, and take the photo again."},
+    "quality": {"clear": false, "width": 1920, "height": 2560, "sharpness": 6.2, "brightness": 141.0, "contrast": 31.5, "glare": 0.0, "issues": ["blurred"], "doubts": []}
+  }
+}
+```
+
+### Check a photo before sending it
+
+`POST /v1/documents/check` with one image in the `file` field answers at once from the pixels alone. Nothing is read, stored or queued, so the portal can call it the moment the applicant takes the photo.
+
+```json
+{
+  "clear": false,
+  "acceptable": false,
+  "quality": {"clear": false, "width": 1920, "height": 2560, "sharpness": 6.2, "brightness": 141.0, "contrast": 31.5, "glare": 0.0, "issues": ["blurred"], "doubts": []},
+  "retake": {"recommended": true, "reasons": ["blurred"], "message": "The photo is blurred. Hold the phone steady, wait for it to focus on the document, and take the photo again."}
+}
+```
+
+`acceptable: false` means the extract call would turn this photo back: ask for another one. `acceptable: true` with `clear: false` is a soft photo that may still read. This check sees the whole photo only: glare over a few MRZ characters or a cut-off MRZ passes here and is caught by the reading, so always handle `retake` in the job result too.
 
 Rejected upload (HTTP 415):
 

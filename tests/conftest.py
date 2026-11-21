@@ -14,3 +14,15 @@ class _InlinePool:
 def _inline_ocr_pool(monkeypatch):
     import app.main as main
     monkeypatch.setattr(main, "_ocr_pool", _InlinePool())
+
+
+@pytest.fixture(autouse=True)
+def _no_clarity_check(monkeypatch, request):
+    """Most tests feed the pipeline a few placeholder bytes or a tiny blank picture with a stand-in reader. The clarity check
+    would turn those away before the reader is reached, so it is off unless a test asks for it with @pytest.mark.clarity."""
+    if "clarity" not in request.keywords:
+        monkeypatch.setenv("IMAGE_QUALITY_CHECK", "0")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "clarity: run with the image clarity check on")

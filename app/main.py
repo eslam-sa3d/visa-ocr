@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import audit, config, crypto, pipeline, security, worker
+from . import audit, config, crypto, pipeline, security, worker, quality
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
@@ -263,6 +263,23 @@ def _process(job_id: str, images: list[bytes], hint: str | None, applicant: Appl
     finally:
         with _inflight_lock:
             _inflight.discard(job_id)
+
+
+@app.post("/v1/documents/check")
+async def check_image(request: Request, file: UploadFile = File(...), owner: str = Depends(security.authenticate)) -> dict:
+    """Is this photo clear enough to send? Answers at once from the pixels alone (nothing is read, stored or queued), so the
+    portal can ask for another photo while the applicant still has the document in hand. A photo that passes here can still
+    come back from the reading with a retake request: glare over a few characters only shows when they are read."""
+    security.limiter.check(security.client_id(request, owner))
+    security.allow(request, "upload", owner)
+    data = await file.read(config.max_bytes() + 1)
+    validate_image(data, file.content_type)
+    q = await run_in_threadpool(quality.measure, data)
+    reasons = q.issues or q.doubts
+    body = {"clear": q.clear, "acceptable": not q.issues, "quality": q.to_dict()}
+    if reasons:
+        body["retake"] = {**quality.retake(reasons), "recommended": bool(q.issues)}
+    return body
 
 
 @app.post("/v1/documents/extract", status_code=202)

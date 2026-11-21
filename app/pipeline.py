@@ -7,7 +7,7 @@ from datetime import date
 import logging
 import traceback
 
-from . import config
+from . import config, quality
 from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
@@ -63,6 +63,21 @@ def _small_image_note(images: list[bytes]) -> str | None:
             return (f"The image is small ({w} x {h} pixels), so the MRZ letters are only a few pixels high and are easily misread. "
                     "Scan at 200 dpi or more, or photograph only the data page so it fills the frame.")
     return None
+
+
+def _with_retake(result: dict, clarity) -> dict:
+    """Mark a reading the applicant should redo with a clearer photo: an MRZ with a failing check digit, or a card whose ID
+    number could not be read or fails its own check. The reading is still returned for the reviewer; the portal shows
+    result["retake"]["message"] to the applicant. A reading that passes its checks is never marked, however the photo looks."""
+    doc = result.get("document") or {}
+    checks = doc.get("checks") or {}
+    card = doc.get("format") == "visual"
+    unclear = any(v is False for v in checks.values()) or (card and not doc.get("idNumber"))
+    if unclear:
+        reasons = list(clarity.doubts) + ["card_unclear" if card else "mrz_unclear"]
+        result["retake"] = quality.retake(reasons)
+        result["flags"].append({"code": "retake_recommended", "severity": "warning", "message": result["retake"]["message"]})
+    return result
 
 
 def _fields_out(output: EngineOutput) -> dict:
@@ -144,6 +159,12 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
 def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
     try:
         images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
+        # A photo that is plainly unusable (black, blank, badly blurred, tiny) is turned back at once with what to do about
+        # it. Reading it would only take longer to reach the same answer.
+        clarity = quality.worst(images) if config.quality_check() else quality.Quality()
+        if clarity.issues:
+            return "failed", {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
+                              "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()}
         output = engine.extract(images, hint)
         mrz_confidence = output.mrz_confidence
         text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
@@ -176,14 +197,18 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
                 result["flags"] += [f.to_dict() for f in a_flags]
                 result["needsReview"] = any(f["severity"] == "error" for f in result["flags"])
                 result["engine"], result["fields"] = output.engine, _fields_out(output)
-                return "done", result
+                return "done", _with_retake(result, clarity)
         if not output.mrz_lines and card_hint:
             output.mrz_lines = _fallback_mrz(images, hint)      # told "card", but no card fields were read: look for an MRZ after all
             mrz_confidence = None
         if output.mrz_lines and not plausible_reading(output.mrz_lines):
             output.mrz_lines = None
         if not output.mrz_lines:
-            return "failed", {"code": "mrz_not_found", "message": _no_document_message(hint, bool(text_lines))}
+            reasons = clarity.doubts + ["not_found"]
+            return "failed", {"code": "image_unclear" if clarity.doubts else "mrz_not_found",
+                              "message": quality.retake_message(reasons) if clarity.doubts
+                              else _no_document_message(hint, bool(text_lines)),
+                              "retake": quality.retake(reasons)}
 
         result = analyse_mrz(output.mrz_lines)
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines,
@@ -220,7 +245,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             result["fields"]["mrzLineBoxes"] = [{**b, "text": t} for b, t in zip(boxes, output.mrz_lines)]
         else:
             result["fields"].pop("mrzLineBoxes", None)
-        return "done", result
+        return "done", _with_retake(result, clarity)
     except EngineUnavailable as exc:
         return "failed", {"code": "engine_unavailable", "message": str(exc)}
     except MrzError as exc:
