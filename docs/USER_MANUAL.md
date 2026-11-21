@@ -206,6 +206,8 @@ Line crops and label files made for a training run are deleted when the run ends
 | Correction refused with `409` | The training data for that job was purged | Nothing to do: purged data is not written back |
 | `429 rate_limited` | More than `RATE_LIMIT_PER_MIN` requests from one client | Raise the limit or set it to 0 behind the portal |
 | `mrz_not_found` | No MRZ visible, or blurred, cut off or sideways | Retake the photo; for cards without an MRZ choose "Iqama / GCC ID" |
+| `image_unclear` | The photo is blurred, too dark, washed out, too small or blank | Show `error.retake.message` to the applicant and ask for another photo. Thresholds: `QUALITY_<NAME>` (see `app/config.py`); `IMAGE_QUALITY_CHECK=0` turns the check off |
+| Result carries `retake` | An MRZ check digit fails, or a card's ID number could not be read | Show `result.retake.message` to the applicant; the reading is still there for the reviewer |
 | `/readyz` answers `not_ready ... is missing` | `OCR_ENGINE=paddle-ocr` without model files | Fetch the models, or use `ensemble` |
 | `/readyz` shows a `warnings` list | `auto` is running on the fallback readers | Fine for the lite image; fetch models for PaddleOCR |
 | Reads take several seconds | No hard limit set, or too few cores | Set `OCR_DEADLINE_SECONDS=1.7`; give each worker 2 cores |

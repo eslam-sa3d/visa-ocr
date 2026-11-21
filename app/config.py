@@ -90,3 +90,18 @@ def work_max_side() -> int:
     """Longest side, in pixels, that images are reduced to before reading (0 = never reduce). Lower is faster and uses less
     memory; too low loses small print. 2000 keeps a full passport page comfortably readable."""
     return max(0, _int("WORK_MAX_SIDE", 2000))
+
+
+# Image clarity (app/quality.py). "reject" values stop an image before it is read; "doubt" values give the reason when a
+# reading then fails. Defaults were set from 432 real photos: no image that was read correctly falls under a reject value.
+_QUALITY_DEFAULTS = {"min_side_reject": 400, "min_side_doubt": 900, "sharpness_reject": 15.0, "sharpness_doubt": 60.0,
+                     "dark_reject": 40.0, "dark_doubt": 70.0, "bright_reject": 245.0,
+                     "contrast_reject": 12.0, "contrast_doubt": 25.0}
+
+
+def quality_check() -> bool: return os.environ.get("IMAGE_QUALITY_CHECK", "1") != "0"
+
+
+def quality_thresholds() -> dict:
+    """QUALITY_<NAME>=value overrides one threshold, e.g. QUALITY_SHARPNESS_REJECT=20."""
+    return {k: _float("QUALITY_" + k.upper(), v) for k, v in _QUALITY_DEFAULTS.items()}
