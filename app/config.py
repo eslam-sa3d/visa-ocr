@@ -108,7 +108,7 @@ def handover_seconds() -> float:
     """Limit for the Tesseract + RapidOCR pair when "auto" calls it after PaddleOCR has already read the page (0 = none).
     PaddleOCR has the page text and has turned a sideways photo upright by then, so the pair only has to look for an MRZ:
     without a limit it also searches the page turned each way and reads all the printed text again."""
-    return max(0.0, _float("OCR_HANDOVER_SECONDS", 8.0))
+    return max(0.0, _float("OCR_HANDOVER_SECONDS", 12.0))
 
 
 def work_max_side() -> int:
