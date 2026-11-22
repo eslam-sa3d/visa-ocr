@@ -160,13 +160,25 @@ class SharedReader:
         kept, crops = self._detect(array)
         return self._recognise(kept, crops, index)
 
+    def _read_all(self, crops: list) -> dict:
+        """Every recogniser's reading of the same boxes. Each language has its own recogniser, so they read side by side:
+        the page takes as long as the slowest language, not the sum of them. PADDLE_PARALLEL_LANGUAGES=0 reads in turn."""
+        def read(lang, rec):
+            with timing.step("paddle.read:" + lang):
+                return list(rec.predict(crops))
+        if len(self.recognisers) < 2 or not config.paddle_parallel_languages():
+            return {lang: read(lang, rec) for lang, rec in self.recognisers.items()}
+        import contextvars
+        from concurrent.futures import ThreadPoolExecutor
+        with timing.step("paddle.readAllLanguages"), ThreadPoolExecutor(max_workers=len(self.recognisers)) as pool:
+            jobs = {lang: pool.submit(contextvars.copy_context().run, read, lang, rec) for lang, rec in self.recognisers.items()}
+            return {lang: job.result() for lang, job in jobs.items()}
+
     def _recognise(self, kept: list, crops: list, index: int) -> list[dict]:
         lines: list[dict] = []
         if not crops:
             return lines
-        for lang, rec in self.recognisers.items():
-            with timing.step("paddle.read:" + lang):
-                results = list(rec.predict(crops))
+        for lang, results in self._read_all(crops).items():
             if len(results) != len(crops):
                 raise RuntimeError("the recogniser did not answer for every text box")
             for poly, res in zip(kept, results):
