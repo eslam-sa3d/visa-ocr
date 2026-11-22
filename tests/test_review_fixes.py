@@ -1209,7 +1209,8 @@ def test_paddle_reports_where_the_mrz_lines_are():
 
 
 def test_second_pair_is_limited_only_on_a_known_card_front(monkeypatch):
-    """An unknown page with no MRZ found gets the pair's full search; a recognised card front gets the limited one."""
+    """An unknown page with no MRZ found gets the pair's full search. A recognised card front with nothing like an MRZ on it
+    is not handed over at all; with a trace of an MRZ it gets the limited search."""
     from app import config, engines
     from app.engines.base import EngineOutput
     seen = []
@@ -1228,11 +1229,12 @@ def test_second_pair_is_limited_only_on_a_known_card_front(monkeypatch):
             return EngineOutput(engine="ensemble", mrz_lines=None, fields={}, confidence=0.5)
 
     for lines in ([{"text": "PASSEPORT"}, {"text": "REPUBLIQUE"}], [{"text": "KINGDOM OF BAHRAIN"}, {"text": "IDENTITY CARD"}],
-                  [{"text": "PERMANENT RESIDENT"}, {"text": "UNITED STATES OF AMERICA"}]):
+                  [{"text": "PERMANENT RESIDENT"}, {"text": "UNITED STATES OF AMERICA"}],
+                  [{"text": "KINGDOM OF BAHRAIN"}, {"text": "IDBHR1234567<<<<<<<<<<<<<<<<<<"}]):
         paddle = Paddle(lines)
         monkeypatch.setattr(engines, "get_engine_by_name", lambda name, p=paddle: p if name == "paddle-ocr" else Pair())
         engines.AutoEngine().extract([b"x"], None)
-    assert seen == [0, config.handover_seconds(), config.handover_seconds()] and config.handover_seconds() > 0
+    assert seen == [0, config.handover_seconds()] and config.handover_seconds() > 0
 
 
 @pytest.mark.fastfirst

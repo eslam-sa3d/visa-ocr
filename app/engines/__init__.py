@@ -52,6 +52,10 @@ class AutoEngine:
         images = getattr(out, "upright_images", None) or images      # a photo taken sideways: the other readers get it upright
         has_text = bool(out.fields.get("textLines"))
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
+            if has_text and _card_front(out) and not _mrz_trace(out):
+                # A card front (a Gulf card, a residence-card front) with nothing on it that looks like an MRZ: the other
+                # readers and the slow searches only look for an MRZ, and here they cost half a minute to find none.
+                return out
             try:
                 # The pair gets a time limit only when the page is already known to be a card front with no MRZ (a Gulf
                 # card or a residence-card front): a full search there finds nothing and costs twenty seconds. On any other
