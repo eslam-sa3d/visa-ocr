@@ -49,7 +49,7 @@
     <h2>1. Upload a document image</h2>
     <div id="drop">Drop a JPEG or PNG here, or click to choose<br>
       <span class="muted">Passport data page, visa sticker, or the back of an ID / green card (the side with the two or three lines of &lt;&lt;&lt;)</span></div>
-    <input id="file" type="file" accept="image/jpeg,image/png" multiple hidden>
+    <input id="file" type="file" accept="image/jpeg,image/png" hidden>
     <div id="thumbs"></div>
     <div class="row">
       <label for="hint">Document type</label>
@@ -120,7 +120,7 @@ const LABELS = [
 const CHECKS = { document_number: "Document number", birth_date: "Date of birth", expiry_date: "Expiry date", optional_data: "Optional data", composite: "Whole-line check", id_number: "ID number check digit" };
 
 function setFiles(list) {
-  files = [...list].filter((f) => f.type === "image/jpeg" || f.type === "image/png");
+  files = [...list].filter((f) => f.type === "image/jpeg" || f.type === "image/png").slice(0, 1);      // one image per read
   const thumbs = $("#thumbs"); thumbs.replaceChildren();
   files.forEach((f) => thumbs.append(el("img", { src: URL.createObjectURL(f), alt: f.name })));
   $("#go").disabled = files.length === 0;
@@ -164,7 +164,7 @@ function showAnalysis(res) {
   if (res.retake && res.retake.recommended) out.append(el("p", { className: "fail", style: "margin:.4rem 0" }, el("b", {}, "Please take the photo again. "), res.retake.message));
   if (res.needsReview) {
     const why = el("ul");
-    res.flags.filter((f) => f.severity === "error").forEach((f) => why.append(el("li", { className: "fail" }, REASONS[f.code] || f.message)));
+    res.flags.filter((f) => f.severity === "error").forEach((f) => why.append(el("li", { className: "fail" }, (f.code === "low_confidence_fields" ? "Read with low confidence, check: " + f.message.split(": ").pop() : REASONS[f.code] || f.message))));
     if (why.children.length) out.append(el("p", { style: "margin:0" }, el("b", {}, "Why review is needed:")), why);
   }
   const table = el("table");

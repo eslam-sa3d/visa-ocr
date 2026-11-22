@@ -291,7 +291,9 @@ def _find_other_gcc_number(lines, labelled, named=frozenset(), labelled_gulf=Tru
                 found[m[0]] = (info, ln.get("score", 1.0))
     if len(found) == 1:
         num, (info, score) = next(iter(found.items()))
-        return num, info, min(score, 0.6)
+        # found without its label: less sure, unless the number proves itself (its own check digit passes)
+        proven = info["kind"] in ("uae_emirates_id", "kuwait_civil_id") and info["valid"]
+        return num, info, score if proven else min(score, 0.6)
     return None
 
 

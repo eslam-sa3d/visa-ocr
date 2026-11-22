@@ -1376,3 +1376,15 @@ def test_calendar_is_only_stated_for_a_hijri_date():
     usual, hijri = card("11/06/2030"), card("11/06/1450")
     assert "expiryCalendar" not in usual and "birthCalendar" not in usual and usual["expiryDate"] == "2030-06-11"
     assert hijri["expiryCalendar"] == "hijri" and "birthCalendar" not in hijri
+
+
+def test_a_self_checking_number_found_without_its_label_keeps_its_score():
+    """A Kuwaiti civil number whose own check digit passes is not marked low-confidence just because its label was unreadable."""
+    from app.gcc_ids import kuwait_check_digit
+    from app.visual_zone import parse_gcc_id
+    body = "29001011234"
+    n = next(body[:10] + x + str(c) for x in "0123456789" for c in [kuwait_check_digit(body[:10] + x)] if c < 10)
+    lines = [{"text": t, "score": 0.97} for t in ("STATE OF KUWAIT", "CIVIL ID CARD", n, "Name SAMPLE PERSON", "Expiry Date 01/01/2031")]
+    r = parse_gcc_id(lines)
+    assert r["document"]["idNumber"] == n and r["document"]["fieldConfidence"]["idNumber"] >= 0.9
+    assert "low_confidence_fields" not in [f["code"] for f in r["flags"]]

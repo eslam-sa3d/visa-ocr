@@ -153,8 +153,10 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     s_scores = second["document"].get("fieldConfidence", {})
     for k in filled:
         doc.setdefault("fieldConfidence", {})[k] = s_scores.get(k, 0.5)
+    # The second reader scores on its own, lower scale, and the flag above already names every filled field as one to check.
+    # A separate low-confidence flag is only raised where cards can be accepted without a person.
     low = sorted(k for k in filled if s_scores.get(k, 0.5) < config.min_confidence_visual())
-    if low:
+    if low and auto:
         result["flags"].append({"code": "low_confidence_fields", "severity": "error",
                                 "message": "Low OCR confidence for filled fields: " + ", ".join(low)})
     return result

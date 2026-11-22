@@ -16,6 +16,7 @@ import re
 import unicodedata
 from datetime import date
 
+from . import config
 from .textutil import normalize_arabic, to_ascii_digits
 from .validation import Flag
 
@@ -248,7 +249,7 @@ def parse_permit(raw_lines: list[dict], today: date | None = None) -> dict | Non
     key = "idNumber" if kind == "oman_resident_card" else "documentNumber"
     if not doc.get(key):
         flags.append(Flag("document_number_not_found", "error", "The card number could not be read."))
-    low = sorted(k for k, v in scores.items() if v and v < 0.9)
+    low = sorted(k for k, v in scores.items() if v and v < config.min_confidence_visual())
     if low:
         flags.append(Flag("low_confidence_fields", "error", "Low OCR confidence for: " + ", ".join(low)))
     flags.append(Flag("visual_zone_only", "error",
