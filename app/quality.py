@@ -27,6 +27,8 @@ MESSAGES = {
                     "in focus and in good light, filling the frame, with no reflection on it.",
     "not_found": "The document could not be read from this photo. Take the photo again: show the page with the two long lines "
                  "of letters and '<' (for a card, the side that has them), flat, in focus and in good light, filling the frame.",
+    "multiple_documents": "The photo shows more than one document. Take a photo of one document only: the page with the two "
+                          "long lines of letters and '<', with no other passport, visa or card in the frame.",
     "too_small": "The image is too small to read. Move closer so the document fills the frame, and take the photo again.",
     "low_contrast": "The print is too faint to read in this photo. Use better light and a plain, darker background, and take "
                     "the photo again.",

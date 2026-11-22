@@ -579,6 +579,31 @@ def plausible_reading(lines: list[str] | None) -> bool:
     return not (passing == 0 and parsed.birth_date is None and parsed.expiry_date is None)
 
 
+def _alike(a: str, b: str) -> bool:
+    """True when two cleaned lines are readings of the same printed line (a few characters may differ)."""
+    from difflib import SequenceMatcher
+    # compared without the filler: two different people's lines are mostly filler and look alike with it
+    a, b = a.replace(FILLER, ""), b.replace(FILLER, "")
+    return bool(a) and bool(b) and SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.8
+
+
+def same_zone(lines: list[str], known: list[str]) -> bool:
+    """True when every one of `lines` is a reading of one of the `known` MRZ lines."""
+    return all(any(_alike(clean_line(l), clean_line(k)) for k in known) for l in lines)
+
+
+def second_mrz(texts: list[str], known: list[str] | None) -> list[str] | None:
+    """Another MRZ among the lines of text read from the page, besides the one already found: a second document in the same
+    photo (two passports side by side, a passport open at a visa). Only a full, plausible MRZ counts."""
+    if not known:
+        return None
+    rest = [t for t in texts if len(clean_line(t)) >= 20 and FILLER in clean_line(t) and not same_zone([t], known)]
+    if len(rest) < 2:
+        return None
+    other = find_mrz_lines(rest)
+    return other if other and plausible_reading(other) and not same_zone(other, known) else None
+
+
 def check_score(lines: list[str] | None) -> tuple[int, bool]:
     """(check digits passing, all passing) for these MRZ lines; (-1, False) when they are not an MRZ. Every reader ranks its
     attempts with this one rule."""

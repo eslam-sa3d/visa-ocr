@@ -160,6 +160,7 @@ Whenever the applicant should take the photo again, the response carries a `reta
 |---|---|---|
 | `error.retake`, code `image_unclear` | The photo is plainly unusable (blurred, too dark, washed out, too small, blank). Turned back before any reading, in milliseconds. | `failed` |
 | `error.retake`, code `mrz_not_found` or `image_unclear` | Nothing could be read from the photo. | `failed` |
+| `error.retake`, code `multiple_documents` | The photo shows more than one document with machine-readable lines. Nothing is read from it. | `failed` |
 | `result.retake` | An MRZ was read but a check digit fails, or a card's ID number could not be read. The reading is still returned for the reviewer. | `done`, `needsReview: true` |
 
 `retake.reasons` lists why, most serious first: `blurred`, `too_dark`, `too_bright`, `low_contrast`, `too_small`, `mrz_unclear`, `card_unclear`, `not_found`. A reading whose check digits all pass never carries `retake`, however the photo looks.

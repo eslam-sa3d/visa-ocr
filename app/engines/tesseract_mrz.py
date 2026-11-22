@@ -142,6 +142,22 @@ class TesseractMrzEngine:
 
         return read, read_strip
 
+    def second_zone(self, images: list[bytes], known: list[str]) -> bool:
+        """True when another strip on the page, as strongly MRZ-shaped as the best one, reads as a different MRZ: the photo
+        shows a second document. Weak candidates are not read, so a page with one document costs nothing extra."""
+        from ..mrz import plausible_reading, same_zone
+        pytesseract, Image, ImageOps = self._deps()
+        _, read_strip = self._reader(pytesseract, ImageOps)
+        for raw in images:
+            bands = find_bands(ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("L"))
+            for band in bands[1:]:
+                if band.score < 0.5 * bands[0].score:
+                    continue
+                lines = read_strip(enlarge(band.image, STRIP_WIDTHS[0]))
+                if lines and plausible_reading(lines) and not same_zone(lines, known):
+                    return True
+        return False
+
     def _strip_search(self, img, read_strip, best: _Found, expired) -> bool:
         """The MRZ strip alone, located by its shape: small, level and enlarged, in any page orientation. True when a
         reading with every check digit passing is in `best`."""

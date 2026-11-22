@@ -12,7 +12,7 @@ from . import config, quality, timing
 from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
-from .mrz import MrzError, parse_mrz, plausible_reading
+from .mrz import MrzError, parse_mrz, plausible_reading, second_mrz
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
 from .permits import FOUND_FIELDS, parse_permit
@@ -198,6 +198,11 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             log.info("lines shaped like an MRZ were not one (no document type letter or dates); treated as no MRZ")
             output.mrz_lines, mrz_confidence = None, None
 
+        seen_two = isinstance(output.fields, dict) and output.fields.get("secondMrz")
+        if output.mrz_lines and (seen_two or text_lines and second_mrz([str(l.get("text", "")) for l in text_lines], output.mrz_lines)):
+            # Two documents in one photo: which one the applicant means cannot be known, and the wrong one could be read.
+            return "failed", {"code": "multiple_documents", "message": quality.MESSAGES["multiple_documents"],
+                              "retake": quality.retake(["multiple_documents"])}
         if not output.mrz_lines and text_lines:
             # The front of a European, UK or US residence card, or an Omani card: no MRZ and no check digit on that side.
             # Read from its printed labels and always sent to a person. Gulf cards that name another state, or carry Arabic

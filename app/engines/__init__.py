@@ -73,6 +73,10 @@ class AutoEngine:
             except EngineUnavailable:
                 second = None
             if second is not None and second.mrz_lines:
+                from ..mrz import second_mrz
+                page = [str(l.get("text", "")) for l in out.fields.get("textLines") or []]
+                if second_mrz(page, second.mrz_lines):       # PaddleOCR saw another MRZ on the page besides this one
+                    second.fields = {**(second.fields or {}), "secondMrz": True}
                 return second
             out.mrz_searched = second is not None and not limited      # the pair searched in full: no one need look again
             if staged:
@@ -111,6 +115,12 @@ class AutoEngine:
             seen.append(first)            # kept even when it is not the answer: it may confirm PaddleOCR's reading later
         agree = ((first.fields or {}).get("readers") or {}).get("agree")
         if first.mrz_lines and agree and check_score(first.mrz_lines)[1]:
+            try:
+                # a second document in the photo is for the whole-page read to see and report
+                if get_engine_by_name(TesseractMrzEngine.name).second_zone(images, first.mrz_lines):
+                    return None
+            except Exception:  # noqa: BLE001 - the extra look is optional
+                pass
             return first
         return None
 
@@ -137,6 +147,10 @@ class AutoEngine:
         except EngineUnavailable:
             return out
         if not second.mrz_lines:
+            return out
+        from ..mrz import plausible_reading, same_zone
+        if not same_zone(second.mrz_lines, out.mrz_lines) and plausible_reading(second.mrz_lines) and plausible_reading(out.mrz_lines):
+            out.fields = {**(out.fields or {}), "secondMrz": True}      # the two readers each read a different document
             return out
         s_out, perfect_out = score(out.mrz_lines)
         s_sec, perfect_sec = score(second.mrz_lines)

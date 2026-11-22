@@ -1388,3 +1388,32 @@ def test_a_self_checking_number_found_without_its_label_keeps_its_score():
     r = parse_gcc_id(lines)
     assert r["document"]["idNumber"] == n and r["document"]["fieldConfidence"]["idNumber"] >= 0.9
     assert "low_confidence_fields" not in [f["code"] for f in r["flags"]]
+
+
+def test_two_documents_in_one_photo_are_turned_back():
+    """A second, different MRZ among the lines read from the page means two documents: nothing is read, and the applicant is
+    asked for a photo of one. The same MRZ read twice, or one MRZ with ordinary print around it, is one document."""
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.mrz import second_mrz
+    from app.review import Applicant
+    one = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    two = ["P<D<<MUSTERMANN<<ERIKA<<<<<<<<<<<<<<<<<<<<<<", "C01X00T478D<<6408125F2702283<<<<<<<<<<<<<<<4"]
+    assert second_mrz(one + two, one) == two
+    assert second_mrz(one + ["PASSPORT", "UTOPIA"], one) is None
+    assert second_mrz(one + [one[0], one[1].replace("L898", "L89B")], one) is None      # the same zone read twice
+    assert second_mrz(two, None) is None
+
+    class Reader:
+        name = "paddle-ocr"
+        def __init__(self, texts):
+            self.texts = texts
+        def extract(self, images, hint):
+            return EngineOutput(engine=self.name, mrz_lines=one, mrz_confidence=0.99, fields={"textLines": [{"text": t} for t in self.texts]})
+    import io
+    from PIL import Image
+    b = io.BytesIO(); Image.new("RGB", (400, 300), "white").save(b, "PNG")
+    status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader(one + two))
+    assert status == "failed" and res["code"] == "multiple_documents" and res["retake"]["recommended"]
+    status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader(one + ["PASSPORT"]))
+    assert status == "done"
