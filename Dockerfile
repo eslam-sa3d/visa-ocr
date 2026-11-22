@@ -28,12 +28,16 @@ RUN if [ "$VARIANT" = "lite" ]; then REQ=requirements-lite; else REQ=requirement
 
 COPY app ./app
 COPY config ./config
+COPY VERSION ./VERSION
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 # Models are fetched on the build host (python tools/fetch_models.py) and copied in; never downloaded at run time.
 COPY models ./models
 
 # "auto" uses PaddleOCR when it is installed and its models are present, and the Tesseract + RapidOCR pair otherwise.
-ENV OCR_ENGINE=auto \
+# This is a production image: it starts in production mode and refuses to start in any unsafe set-up (no key file, no
+# certificate, stored data not encrypted). PRODUCTION=0 gives the test mode, for a workstation only.
+ENV PRODUCTION=1 \
+    OCR_ENGINE=auto \
     MODELS_DIR=/srv/models \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     PYTHONUNBUFFERED=1 \

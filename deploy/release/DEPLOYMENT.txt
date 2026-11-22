@@ -1,0 +1,90 @@
+visa-ocr @VERSION@ (build @TAG@) - deployment notes for the server team
+======================================================================
+
+WHAT THIS IS
+  An OCR service for passports, visas and ID cards. The portal sends an image, gets a job id, and polls for the result.
+  It runs fully offline. One container, one HTTPS port. No database is required (it keeps jobs in a small encrypted file
+  on its data volume); PostgreSQL is optional for several servers sharing one queue.
+
+BEFORE YOU START
+  [ ] Linux server, Intel/AMD 64-bit, Docker with the compose plugin. Start with 4 CPU cores and 8 GB RAM per container;
+      measure before you size for production load (see MEASURE below).
+  [ ] The server does NOT need internet access.
+  [ ] Only the portal's servers should be able to reach this service. Do not expose it to the internet.
+  [ ] A TLS certificate and key for the service's host name, from your organisation's CA.
+
+1. VERIFY AND LOAD
+     sha256sum -c SHA256SUMS.txt
+     gunzip -c visa-ocr-@TAG@-amd64.tar.gz | docker load
+
+2. MAKE THE KEYS  (once; as root)
+     docker run --rm --entrypoint id visa-ocr:@TAG@          -> note the uid of the service user
+     python3 production/make_keys.py /etc/visa-ocr --owner <that uid>
+   This writes /etc/visa-ocr/keys.json (digests only) and /etc/visa-ocr/data.key, and PRINTS three API keys once:
+     portal  (uploader)  upload documents, read its own results      -> give to the portal team
+     review  (reviewer)  read any result, submit corrections
+     ops     (admin)     list models
+   Store the keys and data.key in your key management system. Keys expire after a year (--expires YYYY-MM-DD to change);
+   to rotate, add the new entry to keys.json before removing the old one.
+
+3. ADD THE CERTIFICATE AND THE LOG FOLDER
+     mkdir -p /etc/visa-ocr/tls /var/log/visa-ocr
+     cp <your certificate> /etc/visa-ocr/tls/server.crt ; cp <your key> /etc/visa-ocr/tls/server.key
+     chown -R <that uid> /etc/visa-ocr /var/log/visa-ocr ; chmod -R go-rwx /etc/visa-ocr
+
+4. REVIEW THE SETTINGS AND START
+     Open production/visa-ocr.env. Three lines are marked DECIDE (time limit, parallel jobs, malware scanner); the rest is
+     ready. Then, from the production folder:
+       IMAGE_TAG=@TAG@ docker compose up -d
+   If it does not start:  docker compose logs
+   In production mode it refuses to start when something is unsafe (no key file, no certificate, storage not encrypted)
+   and prints exactly what.
+
+   Without compose, the same thing as one command:
+     docker run -d --name visa-ocr --restart unless-stopped -p 443:443 --read-only --tmpfs /tmp --cap-drop ALL \
+       --security-opt no-new-privileges --env-file production/visa-ocr.env \
+       -v visa-ocr-data:/data -v /etc/visa-ocr:/etc/visa-ocr:ro -v /var/log/visa-ocr:/var/log/visa-ocr visa-ocr:@TAG@
+
+5. CHECK IT WORKS
+     curl --cacert <your CA> https://<host>/healthz                         -> {"status":"ok"}
+     curl --cacert <your CA> https://<host>/readyz                          -> {"status":"ready","authEnabled":true}
+     curl --cacert <your CA> -H "X-API-Key: <ops key>" https://<host>/v1/models   -> the models, each "verified"
+   Upload a test image with the portal key and poll the job:
+     curl --cacert <your CA> -H "X-API-Key: <portal key>" -F "files=@passport.jpg" https://<host>/v1/documents/extract
+     curl --cacert <your CA> -H "X-API-Key: <portal key>" https://<host>/v1/jobs/<jobId>
+   The full system test is in tools.tar.gz. It draws its own test documents and sends nothing real. It needs a key that
+   may do everything, so run it on the TEST environment with a temporary "full" key in keys.json, from a workstation with
+   Python 3.12, the packages in requirements-lite.txt and "requests":
+     tar -xzf tools.tar.gz && python tools/system_test.py --url https://<host> --key <full key> --key2 <second full key>
+
+6. MEASURE  (before go-live; results go into GO_LIVE_RECORD.md)
+     python tools/perf_test.py --url https://<host> --key <portal key> --phase load --levels 1,2,4,8 --n 40
+   Size the number of containers and JOB_THREADS from the result, and set OCR_DEADLINE_SECONDS from the read times you
+   see with your own sample images. Every timing known so far is from a laptop.
+
+7. OPERATE
+   Logs      docker logs visa-ocr            application log; holds no document data
+             /var/log/visa-ocr/audit.log     security events, one JSON line each: send to your SIEM
+   Health    /healthz for liveness, /readyz for readiness (both need no key)
+   Data      Results are deleted after 60 minutes and are encrypted while stored. Nothing is kept longer: training-data
+             collection is off in this set-up.
+   Backup    Nothing in the data volume needs backing up. Keep /etc/visa-ocr in your secret store.
+   Update    Load the new image, set the new IMAGE_TAG, `docker compose up -d`. To go back, use the old tag.
+   Scale     Run more containers behind your load balancer; for a shared queue set DATABASE_URL to a PostgreSQL database.
+
+FOR THE PORTAL TEAM
+  When the applicant should take the photo again, the response carries a "retake" block. Show retake.message to the
+  applicant. It appears in error.retake when the job failed (codes image_unclear and mrz_not_found) and in result.retake
+  when a document was read but a check digit fails. A reading whose check digits all pass never carries it.
+  POST /v1/documents/check answers at once whether a photo is clear enough, before it is sent for reading.
+  Send the applicant's form data with each upload: it confirms the name and nationality, which no check digit covers.
+  Examples: docs/API_EXAMPLES.md in docs.tar.gz.
+
+OPEN BEFORE GO-LIVE (tell your security and business owners; details and owners in GO_LIVE_RECORD.md)
+  - Accuracy has not been confirmed by a person against real documents.
+  - No load or timing figures from production hardware.
+  - No independent penetration test or second-person source code review.
+  - Not a statement of compliance with NCA controls; docs/NCA_CONTROLS.md lists what the service does and what must be
+    supplied around it.
+  - Reads the document side that carries the MRZ, and Saudi and GCC ID cards. It does not read the front of European,
+    UK or US residence permits.

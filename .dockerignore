@@ -16,3 +16,9 @@ tools
 deploy
 .mypy_cache
 .coverage
+release
+release.new
+release.previous
+*.tar.gz
+*.zip
+.local

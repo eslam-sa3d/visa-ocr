@@ -83,7 +83,14 @@ async def lifespan(_app):
 # The interactive API pages are off unless API_DOCS=1: they are served without a key, describe every endpoint, and load their
 # scripts from a public CDN, which an offline server cannot reach anyway.
 _docs = config.api_docs()
-app = FastAPI(title="Visa Portal Document OCR", version="0.3.0", lifespan=lifespan,
+def _version() -> str:
+    try:
+        return (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip() or "0"
+    except OSError:
+        return "0"
+
+
+app = FastAPI(title="Visa Portal Document OCR", version=_version(), lifespan=lifespan,
               docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
               openapi_url="/openapi.json" if _docs else None)
 app.add_middleware(security.BodyLimit)

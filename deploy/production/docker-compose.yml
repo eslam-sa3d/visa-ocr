@@ -6,7 +6,7 @@
 #      `docker run --rm --entrypoint id visa-ocr:TAG ocr`)
 #   The same set-up (read-only image, no capabilities, keys from a file, encrypted storage) is what
 #   tools/production_smoke.sh proves on the build host.
-#   5. review visa-ocr.env (lines marked DECIDE), then:  IMAGE_TAG=0.3.0-xxxxxxx docker compose up -d
+#   5. review visa-ocr.env (lines marked DECIDE), then:  IMAGE_TAG=1.0.0-xxxxxxx docker compose up -d
 services:
   visa-ocr:
     image: visa-ocr:${IMAGE_TAG:?set IMAGE_TAG to the loaded image tag}
