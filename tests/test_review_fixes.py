@@ -1315,3 +1315,38 @@ def test_card_front_is_not_searched_for_an_mrz_again(monkeypatch):
         raise AssertionError("no other reader on a card front")
     monkeypatch.setattr(engines, "get_engine_by_name", get)
     assert engines.AutoEngine().extract([b"x"], None).mrz_searched
+
+
+@pytest.mark.fastfirst
+def test_quick_look_confirms_paddle_without_a_second_read(monkeypatch):
+    """The pair's quick look was not enough on its own (the readers differed), but its lines match what PaddleOCR then read
+    and every check digit passes: that is two independent readings agreeing, and the pair is not run a second time."""
+    from app import config, engines
+    from app.engines.base import EngineOutput
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    pair_calls = []
+
+    class Paddle:
+        def extract(self, images, hint, deep=True):
+            return EngineOutput(engine="paddle-ocr", mrz_lines=good, mrz_confidence=0.5, fields={"textLines": [{"text": "x"}]})
+
+    class Pair:
+        def extract(self, images, hint):
+            pair_calls.append(1)
+            return EngineOutput(engine="ensemble", mrz_lines=good, fields={"readers": {"agree": False}})
+
+    monkeypatch.setattr(engines, "get_engine_by_name", lambda name: Paddle() if name == "paddle-ocr" else Pair())
+    out = engines.AutoEngine().extract([b"x"], None)
+    assert out.engine == "paddle-ocr" and out.mrz_confidence >= config.agreement_confidence() and len(pair_calls) == 1
+
+
+def test_result_says_where_the_time_went():
+    from app import timing
+    with timing.collect() as steps:
+        with timing.step("a"):
+            pass
+        with timing.step("a"):
+            pass
+    assert list(steps) == ["a"] and steps["a"] >= 0
+    with timing.step("outside"):       # no collection running: nothing recorded, nothing raised
+        pass

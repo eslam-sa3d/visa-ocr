@@ -42,7 +42,7 @@ def _writable_cache_home() -> None:
 
 _writable_cache_home()
 
-from .. import config
+from .. import config, timing
 from ..mrz import check_score, clean_line, find_mrz_lines, lines_confidence
 from ..uploads import upscaled_size
 from ..model_registry import ManifestError, Registry
@@ -106,8 +106,9 @@ class SharedReader:
 
     def _detect(self, array) -> tuple[list, list]:
         polys = []
-        for res in self.detector.predict(array):
-            polys += list(_result_dict(res).get("dt_polys", []))
+        with timing.step("paddle.findText"):
+            for res in self.detector.predict(array):
+                polys += list(_result_dict(res).get("dt_polys", []))
         polys = list(self.sort(polys)) if polys else []
         kept, crops = [], []
         for poly, sub in zip(polys, self.crop(array, polys) if polys else []):
@@ -164,7 +165,8 @@ class SharedReader:
         if not crops:
             return lines
         for lang, rec in self.recognisers.items():
-            results = list(rec.predict(crops))
+            with timing.step("paddle.read:" + lang):
+                results = list(rec.predict(crops))
             if len(results) != len(crops):
                 raise RuntimeError("the recogniser did not answer for every text box")
             for poly, res in zip(kept, results):
@@ -571,8 +573,10 @@ class PaddleOcrEngine:
         on_page = bool(mrz)
         if "en" in self.langs and not check_score(mrz)[1]:
             # nothing found, or a reading with a failing check digit: read the strip around the MRZ again, enlarged
-            en_reader = readers.get("en") or self._reader("en")
-            again, again_conf = self._mrz_around_anchor(images, lines, en_reader, np, Image, ImageOps)
+            with timing.step("paddle.loadSecondReader"):
+                en_reader = readers.get("en") or self._reader("en")
+            with timing.step("paddle.mrzStripAgain"):
+                again, again_conf = self._mrz_around_anchor(images, lines, en_reader, np, Image, ImageOps)
             if again and check_score(again)[1]:        # only a reading whose every check digit passes replaces what was read
                 mrz, mrz_conf = again, again_conf
         if deep and "en" in self.langs and not on_page and not check_score(mrz)[1]:

@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import date
 
 import logging
+import time
 import traceback
 
-from . import config, quality
+from . import config, quality, timing
 from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
@@ -45,7 +46,8 @@ def analyse_mrz(lines: list[str]) -> dict:
 def _fallback_mrz(images: list[bytes], hint: str | None) -> list[str] | None:
     """Second opinion: the MRZ-only engine is good at the bottom band of a passport or visa."""
     try:
-        return get_engine_by_name("tesseract-mrz").extract(images, hint).mrz_lines
+        with timing.step("mrzFallback"):
+            return get_engine_by_name("tesseract-mrz").extract(images, hint).mrz_lines
     except Exception as exc:  # noqa: BLE001 - optional fallback; never fail the job because of it
         log.warning("MRZ fallback reader failed: %s at %s", type(exc).__name__, where(exc))
         return None
@@ -112,7 +114,8 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
         return result
     try:
         from .engines.tesseract_text import read_text_lines
-        second = parse_gcc_id(read_text_lines(images))
+        with timing.step("secondCardReader"):
+            second = parse_gcc_id(read_text_lines(images))
     except Exception as exc:  # noqa: BLE001 - the second reader is a bonus; its absence must not break the first reading
         log.warning("second card reader failed: %s at %s", type(exc).__name__, where(exc))
         return result
@@ -158,15 +161,27 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
 
 
 def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
+    """Read the document. The result says how long each step took ("timings", in seconds)."""
+    started = time.monotonic()
+    with timing.collect() as steps:
+        status, result = _run(images, hint, applicant, engine)
+    if status == "done" and isinstance(result, dict):
+        result["timings"] = {**steps, "total": round(time.monotonic() - started, 2)}
+    return status, result
+
+
+def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
     try:
         images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
         # A photo that is plainly unusable (black, blank, badly blurred, tiny) is turned back at once with what to do about
         # it. Reading it would only take longer to reach the same answer.
-        clarity = quality.clearest(images) if config.quality_check() else quality.Quality()
+        with timing.step("clarityCheck"):
+            clarity = quality.clearest(images) if config.quality_check() else quality.Quality()
         if clarity.issues:
             return "failed", {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
                               "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()}
-        output = engine.extract(images, hint)
+        with timing.step("readers"):
+            output = engine.extract(images, hint)
         mrz_confidence = output.mrz_confidence
         text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
         # The MRZ-only search is slow (several seconds when nothing is there). Skip it when the caller said the card has no MRZ and

@@ -5,6 +5,7 @@ from typing import Callable
 import logging
 import threading
 
+from .. import timing
 from .base import Engine, EngineOutput, EngineUnavailable
 from .ensemble import EnsembleEngine
 from .paddle_ocr import PaddleOcrEngine
@@ -31,14 +32,17 @@ class AutoEngine:
 
     def extract(self, images, doc_type_hint):
         wants_mrz = doc_type_hint not in ("iqama", "gcc_id")
-        quick = self._fast_first(images, doc_type_hint) if wants_mrz else None
+        with timing.step("quickLook"):
+            seen: list = []
+            quick = self._fast_first(images, doc_type_hint, seen) if wants_mrz else None
         if quick is not None:
             return quick
         try:
             paddle = get_engine_by_name(PaddleOcrEngine.name)
             # When an MRZ is expected, PaddleOCR's slow last-chance searches wait until the second pair has had its turn.
             staged = wants_mrz and hasattr(paddle, "mrz_retries")
-            out = paddle.extract(images, doc_type_hint, deep=False) if staged else paddle.extract(images, doc_type_hint)
+            with timing.step("paddle"):
+                out = paddle.extract(images, doc_type_hint, deep=False) if staged else paddle.extract(images, doc_type_hint)
         except EngineUnavailable:
             return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except Exception as exc:  # noqa: BLE001
@@ -64,7 +68,7 @@ class AutoEngine:
                 # page the pair searches in full: with a limit it reads less thoroughly, and that lost passports it could read.
                 from .. import config
                 limited = _card_front(out)
-                with config.limited_read(config.handover_seconds() if limited else 0):
+                with timing.step("secondPair"), config.limited_read(config.handover_seconds() if limited else 0):
                     second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
             except EngineUnavailable:
                 second = None
@@ -75,7 +79,8 @@ class AutoEngine:
                 try:
                     # the slowest search (straightening the page) only when something on the page looks like an MRZ
                     trace = _mrz_trace(out) or (second is not None and _mrz_trace(second))
-                    out.mrz_lines, out.mrz_confidence = paddle.mrz_retries(images, straighten=bool(trace))
+                    with timing.step("paddleMrzRetries"):
+                        out.mrz_lines, out.mrz_confidence = paddle.mrz_retries(images, straighten=bool(trace))
                 except Exception as exc:  # noqa: BLE001 - a failed last look must not lose the text already read
                     log.error("PaddleOCR's last MRZ search failed (%s)", type(exc).__name__)
             if second is not None and not out.mrz_lines and not has_text:
@@ -83,11 +88,12 @@ class AutoEngine:
             if second is None:
                 return out
         if out.mrz_lines:
-            out = self._second_opinion(out, images, doc_type_hint)
+            with timing.step("secondOpinion"):
+                out = self._second_opinion(out, images, doc_type_hint, seen[0] if seen else None)
         return out
 
     @staticmethod
-    def _fast_first(images, doc_type_hint):
+    def _fast_first(images, doc_type_hint, seen: list | None = None):
         """The quick answer for a clear document: the pair's reading, when both readers agree and every check digit passes.
         None in every other case (off, pair not installed, no MRZ, any doubt), and PaddleOCR then reads as usual."""
         from .. import config
@@ -101,13 +107,15 @@ class AutoEngine:
                 first = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except Exception:  # noqa: BLE001 - the quick look is optional; any trouble means the normal path
             return None
+        if seen is not None:
+            seen.append(first)            # kept even when it is not the answer: it may confirm PaddleOCR's reading later
         agree = ((first.fields or {}).get("readers") or {}).get("agree")
         if first.mrz_lines and agree and check_score(first.mrz_lines)[1]:
             return first
         return None
 
     @staticmethod
-    def _second_opinion(out, images, doc_type_hint):
+    def _second_opinion(out, images, doc_type_hint, seen=None):
         """PaddleOCR often reads an MRZ correctly but scores it low (0.6 on a phone photo), which sends the whole document to
         review. When its confidence is below the review threshold, the Tesseract + RapidOCR pair reads it too: if they return the
         same lines and every check digit passes, two independent readers agree, and that agreement is the confidence. If the
@@ -116,6 +124,11 @@ class AutoEngine:
         from ..mrz import check_score as score
         threshold = config.min_confidence_unprotected()
         if out.mrz_confidence is not None and out.mrz_confidence >= threshold:
+            return out
+        # The quick look at the start already read the strip with the other readers. The same lines from them, with every
+        # check digit passing, is the agreement this step exists to find: no need to read the page again for it.
+        if seen is not None and seen.mrz_lines and seen.mrz_lines == out.mrz_lines and score(out.mrz_lines)[1]:
+            out.mrz_confidence = max(out.mrz_confidence or 0.0, config.agreement_confidence())
             return out
 
         try:

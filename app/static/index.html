@@ -159,6 +159,8 @@ function showAnalysis(res) {
   const doc = res.document;
   out.append(el("div", { className: "banner " + (res.needsReview ? "review" : "ok") },
     res.needsReview ? "Needs human review" : "Looks good: all checks passed"));
+  if (res.timings) out.append(el("p", { style: "margin:.3rem 0;color:#555;font-size:.85rem" }, "Read in " + res.timings.total + " s (" +
+    Object.entries(res.timings).filter(([k, v]) => k !== "total" && v >= 0.1).map(([k, v]) => k + " " + v).join(", ") + ")"));
   if (res.retake && res.retake.recommended) out.append(el("p", { className: "fail", style: "margin:.4rem 0" }, el("b", {}, "Please take the photo again. "), res.retake.message));
   if (res.needsReview) {
     const why = el("ul");
