@@ -218,7 +218,11 @@ class TesseractMrzEngine:
             started = time.monotonic()
             best.score = -2                             # each image is ranked afresh; the lines of an earlier one are kept
             expired = lambda: time.monotonic() - started > budget   # noqa: E731
-            if self._strip_search(img, read_strip, best, expired) or self._level_search(img, Image, read, best, expired) or best.lines:
+            if self._strip_search(img, read_strip, best, expired):
+                return EngineOutput(engine=self.name, mrz_lines=best.lines)
+            if app_config.strip_only():
+                continue                                # a quick look: the strip or nothing
+            if self._level_search(img, Image, read, best, expired) or best.lines:
                 return EngineOutput(engine=self.name, mrz_lines=best.lines)
             if deadline:
                 continue                                # no time left for the sideways search under a hard limit

@@ -19,6 +19,8 @@ class EngineOutput:
     mrz_confidence: float | None = None   # lowest OCR score among the MRZ lines (None when the engine gives no scores)
     # The pages turned upright, when the engine found a photo taken sideways (for another reader to use; never stored).
     upright_images: list[bytes] | None = None
+    # True when a search for an MRZ beyond this engine's own has already been made (or is known to be pointless).
+    mrz_searched: bool = False
 
 
 class Engine(Protocol):

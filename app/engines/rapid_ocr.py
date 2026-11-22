@@ -337,7 +337,7 @@ class RapidOcrEngine:
                 img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
                 t0 = t_begin if index == 0 else time.monotonic()
                 tried_strip, perfect = self._strip_stage(reader, img, index, best, deadline, t0, np)
-                if not perfect:
+                if not perfect and not app_config.strip_only():
                     perfect = self._page_stage(reader, img, index, best, deadline, budget, t0, tried_strip, np, Image)
                 if perfect:
                     return EngineOutput(engine=self.name, mrz_lines=best.lines, mrz_confidence=best.conf, fields=best.fields)

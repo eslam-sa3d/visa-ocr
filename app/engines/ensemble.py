@@ -171,6 +171,8 @@ class EnsembleEngine:
         """No MRZ on the page (Iqama, GCC IDs): return Arabic + English text lines for the ID-card reader. `started` is when
         this job's reading began: with a hard limit set, the text read only gets what the MRZ search left of it."""
         left = None
+        if app_config.strip_only():
+            return {}            # a quick look for an MRZ strip: the printed text is someone else's job
         if started is not None and app_config.ocr_deadline():
             left = max(0.0, app_config.ocr_deadline() - (time.monotonic() - started))
             if left < 0.3:
@@ -310,7 +312,7 @@ class EnsembleEngine:
         # The printed page is only needed when the two readers do not settle everything between them. It is read then, in
         # whatever time is left (always when there is no hard limit).
         settled = bool(t.mrz_lines) and t.mrz_lines == r.mrz_lines and _score(t.mrz_lines)[1]
-        if (t.mrz_lines or r.mrz_lines) and not settled and not (r.fields or {}).get("textLines"):
+        if (t.mrz_lines or r.mrz_lines) and not settled and not (r.fields or {}).get("textLines") and not app_config.strip_only():
             limit = app_config.ocr_deadline()
             left = (limit - (time.monotonic() - started)) if limit else PAGE_TEXT_SECONDS
             if left > MIN_PAGE_TEXT_SECONDS:

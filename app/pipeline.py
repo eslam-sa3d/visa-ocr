@@ -172,7 +172,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         # The MRZ-only search is slow (several seconds when nothing is there). Skip it when the caller said the card has no MRZ and
         # the card text was read, and when the engine already ran that same search itself.
         card_hint = hint in ("iqama", "gcc_id") and bool(text_lines)
-        already_searched = output.engine == "ensemble" and not (hint in ("iqama", "gcc_id"))
+        already_searched = (output.engine == "ensemble" and not (hint in ("iqama", "gcc_id"))) or getattr(output, "mrz_searched", False)
         if not output.mrz_lines and output.engine != "tesseract-mrz" and not card_hint and not already_searched:
             output.mrz_lines = _fallback_mrz(images, hint)
             mrz_confidence = None                      # the fallback reports no scores

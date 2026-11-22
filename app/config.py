@@ -104,6 +104,25 @@ def limited_read(seconds: float):
         _read_limit.reset(token)
 
 
+_strip_only: contextvars.ContextVar[bool] = contextvars.ContextVar("strip_only", default=False)
+
+
+@contextlib.contextmanager
+def quick_look(seconds: float):
+    """A limited read that only looks where an MRZ strip shows by its shape, and reads no printed text. A clear passport is
+    answered from that strip; a page with no such strip (a card front) is given up in a fraction of a second."""
+    token = _strip_only.set(True)
+    try:
+        with limited_read(seconds):
+            yield
+    finally:
+        _strip_only.reset(token)
+
+
+def strip_only() -> bool:
+    return _strip_only.get()
+
+
 def fast_first_seconds() -> float:
     """In "auto", the Tesseract + RapidOCR pair gets this long to read the MRZ BEFORE PaddleOCR is tried (0 = off: PaddleOCR
     always reads first). The pair's answer is taken only when both readers give the same lines and every check digit

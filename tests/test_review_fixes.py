@@ -1288,3 +1288,30 @@ def test_emirates_id_dates_under_their_labels_and_sex():
              L("Expiry Date/", 174, 535, 313, 558), L("Sex: F", 421, 544, 472, 565), L("11/06/2028", 215, 553, 281, 570)]
     d = parse_gcc_id(lines)["document"]
     assert d["kind"] == "uae_emirates_id" and d["birthDate"] == "1990-03-05" and d["expiryDate"] == "2028-06-11" and d["sex"] == "F"
+
+
+def test_quick_look_is_strip_only_and_limited():
+    from app import config
+    assert not config.strip_only()
+    with config.quick_look(3):
+        assert config.strip_only() and config.ocr_deadline() == 3
+    assert not config.strip_only() and config.ocr_deadline() == 0
+
+
+def test_card_front_is_not_searched_for_an_mrz_again(monkeypatch):
+    """A card front with no trace of an MRZ comes back marked as searched, so the pipeline's own MRZ search is skipped."""
+    from app import engines
+    from app.engines.base import EngineOutput
+
+    class Paddle:
+        def extract(self, images, hint, deep=True):
+            return EngineOutput(engine="paddle-ocr", fields={"textLines": [{"text": "KINGDOM OF BAHRAIN"}, {"text": "IDENTITY CARD"}]})
+        def mrz_retries(self, images, straighten=True):
+            raise AssertionError("no slow search on a card front")
+
+    def get(name):
+        if name == "paddle-ocr":
+            return Paddle()
+        raise AssertionError("no other reader on a card front")
+    monkeypatch.setattr(engines, "get_engine_by_name", get)
+    assert engines.AutoEngine().extract([b"x"], None).mrz_searched

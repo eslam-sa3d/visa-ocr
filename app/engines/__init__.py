@@ -52,21 +52,25 @@ class AutoEngine:
         images = getattr(out, "upright_images", None) or images      # a photo taken sideways: the other readers get it upright
         has_text = bool(out.fields.get("textLines"))
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
+            limited = False
             if has_text and _card_front(out) and not _mrz_trace(out):
                 # A card front (a Gulf card, a residence-card front) with nothing on it that looks like an MRZ: the other
                 # readers and the slow searches only look for an MRZ, and here they cost half a minute to find none.
+                out.mrz_searched = True
                 return out
             try:
                 # The pair gets a time limit only when the page is already known to be a card front with no MRZ (a Gulf
                 # card or a residence-card front): a full search there finds nothing and costs twenty seconds. On any other
                 # page the pair searches in full: with a limit it reads less thoroughly, and that lost passports it could read.
                 from .. import config
-                with config.limited_read(config.handover_seconds() if _card_front(out) else 0):
+                limited = _card_front(out)
+                with config.limited_read(config.handover_seconds() if limited else 0):
                     second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
             except EngineUnavailable:
                 second = None
             if second is not None and second.mrz_lines:
                 return second
+            out.mrz_searched = second is not None and not limited      # the pair searched in full: no one need look again
             if staged:
                 try:
                     # the slowest search (straightening the page) only when something on the page looks like an MRZ
@@ -93,7 +97,7 @@ class AutoEngine:
             return None
         try:
             get_engine_by_name(PaddleOcrEngine.name)          # no PaddleOCR: the pair is the whole reader anyway, unlimited
-            with config.limited_read(limit):
+            with config.quick_look(limit):
                 first = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except Exception:  # noqa: BLE001 - the quick look is optional; any trouble means the normal path
             return None
