@@ -1350,3 +1350,29 @@ def test_result_says_where_the_time_went():
     assert list(steps) == ["a"] and steps["a"] >= 0
     with timing.step("outside"):       # no collection running: nothing recorded, nothing raised
         pass
+
+
+def test_calendar_is_only_stated_for_a_hijri_date():
+    """A card's result names the calendar of a date only when it is Hijri; a Gregorian date is the usual case and says nothing."""
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.gcc_ids import luhn_ok
+    from app.review import Applicant
+    n = next(f"78419801234567{d}" for d in "0123456789" if luhn_ok(f"78419801234567{d}"))
+
+    def card(expiry):
+        class Reader:
+            name = "paddle-ocr"
+            def extract(self, images, hint):
+                lines = [{"text": t, "score": 0.98} for t in ("UNITED ARAB EMIRATES", "ID Number " + n, "Name: Jane Sample Doe",
+                                                             "Date of Birth: 05/03/1990", "Expiry Date: " + expiry)]
+                return EngineOutput(engine=self.name, fields={"textLines": lines}, mrz_searched=True)
+        import io
+        from PIL import Image
+        b = io.BytesIO(); Image.new("RGB", (400, 300), "white").save(b, "PNG")
+        status, res = pipeline.run([b.getvalue()], "gcc_id", Applicant(), Reader())
+        assert status == "done"
+        return res["document"]
+    usual, hijri = card("11/06/2030"), card("11/06/1450")
+    assert "expiryCalendar" not in usual and "birthCalendar" not in usual and usual["expiryDate"] == "2030-06-11"
+    assert hijri["expiryCalendar"] == "hijri" and "birthCalendar" not in hijri

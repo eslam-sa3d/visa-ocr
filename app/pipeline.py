@@ -224,6 +224,9 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
                 result["flags"] += [f.to_dict() for f in a_flags]
                 result["needsReview"] = any(f["severity"] == "error" for f in result["flags"])
                 result["engine"], result["fields"] = output.engine, _fields_out(output)
+                for key in ("birthCalendar", "expiryCalendar"):
+                    if doc.get(key) == "gregorian":
+                        del doc[key]          # the calendar is only stated when it is not the usual one (a Hijri date)
                 return "done", _with_retake(result, clarity)
         if not output.mrz_lines and card_hint:
             output.mrz_lines = _fallback_mrz(images, hint)      # told "card", but no card fields were read: look for an MRZ after all
