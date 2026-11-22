@@ -1270,3 +1270,19 @@ def test_clear_document_is_answered_by_the_pair_without_paddle(monkeypatch):
     assert run(Pair(bad, True)).engine == "paddle-ocr"                                  # a check digit fails
     assert run(Pair(None, False)).engine == "paddle-ocr"
     assert run(Pair(good, True), "gcc_id").engine == "paddle-ocr" and calls[0] == "paddle"     # a card: no MRZ expected
+
+
+def test_emirates_id_dates_under_their_labels_and_sex():
+    """On the Emirates ID the issue and expiry dates are printed under their labels; the expiry is the one under "Expiry"."""
+    from app.gcc_ids import luhn_ok
+    from app.visual_zone import parse_gcc_id
+    n = next(f"78419801234567{d}" for d in "0123456789" if luhn_ok(f"78419801234567{d}"))
+    def L(text, x0, y0, x1, y1):
+        return {"text": text, "score": 0.98, "box": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}
+    lines = [L("UNITED ARAB EMIRATES", 19, 298, 220, 320), L("Resident Identity Card", 66, 338, 178, 354), L("ID Number/", 199, 364, 325, 390),
+             L(f"{n[:3]}-{n[3:7]}-{n[7:14]}-{n[14]}", 198, 384, 328, 404), L("Name: Jane Sample Doe", 176, 426, 388, 442),
+             L("05/03/1990", 301, 447, 373, 465), L("Date of Birth:", 177, 450, 248, 464), L("Nationality: Egypt", 176, 491, 348, 509),
+             L("Issuing Date /", 175, 508, 317, 528), L("12/06/2023", 216, 524, 281, 538), L("Signature/", 62, 538, 162, 563),
+             L("Expiry Date/", 174, 535, 313, 558), L("Sex: F", 421, 544, 472, 565), L("11/06/2028", 215, 553, 281, 570)]
+    d = parse_gcc_id(lines)["document"]
+    assert d["kind"] == "uae_emirates_id" and d["birthDate"] == "1990-03-05" and d["expiryDate"] == "2028-06-11" and d["sex"] == "F"

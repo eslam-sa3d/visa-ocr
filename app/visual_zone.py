@@ -502,6 +502,43 @@ def _read_labelled_fields(c: _Card) -> None:
             c.set("employerId", digits, f[1])
 
 
+def _date_below_label(field: str, lines: list[dict]) -> tuple[tuple[str, str], dict] | None:
+    """The nearest date printed under a field's label (overlapping it sideways, within three line heights)."""
+    for label in lines:
+        if _classify(label["text"])[0] != field:
+            continue
+        lb = _bbox(label)
+        if not lb:
+            continue
+        h = max(lb[3] - lb[1], 1.0)
+        best = None
+        for o in lines:
+            ob = _bbox(o)
+            if o is label or not ob or _is_label(o):
+                continue
+            if lb[1] + 0.4 * h <= ob[1] <= lb[3] + 3 * h and ob[2] >= lb[0] - h and ob[0] <= lb[2] + h:
+                parsed = parse_date(o["text"])
+                if parsed and (best is None or ob[1] < best[2]):
+                    best = (parsed, o, ob[1])
+        if best:
+            return best[0], best[1]
+    return None
+
+
+def _read_sex(c: _Card) -> None:
+    """"Sex: M" or "الجنس ذكر" printed in one piece."""
+    for ln in c.lines:
+        m = re.search(r"\bsex\s*[:.]?\s*([MF])\b", ln["text"], re.I)
+        if m:
+            c.doc["sex"], c.scores["sex"] = m[1].upper(), ln.get("score", 1.0)
+            return
+    for ln in c.lines:
+        t = normalize_arabic(ln["text"])
+        if re.search(r"الجنس(?!ي)", t) and re.search(r"ذكر|انثي|انثى", t):
+            c.doc["sex"], c.scores["sex"] = ("M" if "ذكر" in t else "F"), ln.get("score", 1.0)
+            return
+
+
 def _read_dates(c: _Card, auto_accept: bool) -> None:
     """Birth and expiry dates, by label first."""
     dates: dict[str, tuple[str, str]] = {}
@@ -511,6 +548,11 @@ def _read_dates(c: _Card, auto_accept: bool) -> None:
             parsed = parse_date(f[0])
             if parsed:
                 dates[field], c.scores[field] = parsed, f[1].get("score", 1.0)
+    for field in ("birthDate", "expiryDate"):
+        if field not in dates:
+            below = _date_below_label(field, c.lines)        # Emirates ID: the date is printed under its label, not beside it
+            if below:
+                dates[field], c.scores[field] = below[0], below[1].get("score", 1.0)
     if "expiryDate" not in dates and "birthDate" in dates:
         # The expiry label is often garbled by OCR ("تاريخ <ul 2028/01/30"). A second line that says "date" and has one date is
         # taken as the expiry, but only as a guess: it always reaches a person.
@@ -567,6 +609,7 @@ def parse_gcc_id(raw_lines: list[dict], today: date | None = None, auto_accept: 
     _read_names(c)
     _read_labelled_fields(c)
     _read_dates(c, auto_accept)
+    _read_sex(c)
     _check_dates(c, today, auto_accept)
 
     doc, flags = c.doc, c.flags
