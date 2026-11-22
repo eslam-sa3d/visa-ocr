@@ -62,7 +62,7 @@ def _read_one(path: Path, engine) -> tuple[dict, dict]:
         status, res = "crash", {"code": type(exc).__name__}
     doc = res.get("document") or {}
     checks = doc.get("checks") or {}
-    row = {"seconds": round(time.monotonic() - started, 2), "status": status, "code": res.get("code"), "engine": res.get("engine"),
+    row = {"seconds": round(time.monotonic() - started, 2), "timings": res.get("timings"), "status": status, "code": res.get("code"), "engine": res.get("engine"),
            "format": doc.get("format"), "kind": doc.get("kind") or doc.get("documentType"),
            "checksPass": all(checks.values()) if checks else None, "needsReview": res.get("needsReview"),
            "errors": [f["code"] for f in res.get("flags", []) if f.get("severity") == "error"]}
