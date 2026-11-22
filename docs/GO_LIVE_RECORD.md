@@ -11,7 +11,7 @@ The build does not finish unless both proofs pass, so a release folder that exis
 
 | Check | Result | Proof |
 |---|---|---|
-| Automated tests | 345 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
+| Automated tests | 354 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
 | Static check | clean | `python -m pyflakes app training tools tests deploy` |
 | System test, production reader, training on | 34 of 34 | `tools/system_test.py --training` |
 | System test, production set-up (`PRODUCTION=1`, key file, AES-256-GCM, TLS, audit log) | 33 of 33, 1 skipped (training is off) | `tools/system_test.py --insecure` against the entrypoint |
@@ -21,6 +21,10 @@ The build does not finish unless both proofs pass, so a release folder that exis
 | Production set-up in the real image, offline: keys with roles from a file, a request with no key refused, the portal key barred from listing models, a blank photo turned back with a retake message, stored result encrypted, audit log written, read-only image | PASS at build | `BUILD_INFO.txt` (`tools/production_smoke.sh`) |
 | Base image pinned by digest | recorded at build | `BUILD_INFO.txt` |
 | Real images, production reader | 432 images; 257 to 259 of 286 passports and visas pass every check digit; none accepted wrongly against the provisional answers | `tools/read_folder.py`, `tools/accuracy_real.py` |
+
+Document types read: passports, visas and ID cards from the MRZ side; Saudi, UAE, Kuwait, Qatar, Bahrain and Oman cards
+and the front of European, UK and US residence cards from printed text (always reviewed; built against about 85 sample
+images, values not yet checked by a person).
 
 Found and fixed while preparing this record:
 - The container refused to start when keys came only from `API_KEYS_FILE` (the production set-up).
@@ -39,9 +43,13 @@ Found and fixed while preparing this record:
 | 6 | Audit log arriving in the SIEM; a malware scanner chosen (`UPLOAD_SCAN_COMMAND`) or a written exception | Cybersecurity | Site systems |
 | 7 | Second-person code review against `docs/SECURE_CODING.md`: date ______ by ______ | Someone other than the author | Independence |
 | 8 | Penetration test of the portal including this service: date ______ by ______; findings closed | Outside party | Independence |
-| 9 | Pilot on real traffic with every result reviewed, then the acceptance numbers signed | Business owner | `docs/GO_LIVE_PLAN.md` |
+| 9 | Data owner approves keeping consented document images for training (30 days, encrypted), and the portal asks the applicant for that consent | Data owner, portal team | Policy decision |
+| 10 | Pilot on real traffic with every result reviewed, then the acceptance numbers signed | Business owner | `docs/GO_LIVE_PLAN.md` |
 
-The training loop stays off at go-live (`TRAINING_STORE_DIR` unset). It is turned on only after the accuracy item has produced a
-golden set.
+Training-data collection is ON in the production settings (`TRAINING_STORE_DIR=/data/training`): consented uploads and
+reviewers' corrections are stored encrypted for 30 days. No model changes by itself: retraining runs on the training
+machine, a correction needs a second person's approval, and a candidate replaces the model in use only when it beats it
+on a golden set that a person has confirmed. Until that golden set exists, candidates are built but never activated.
+The data owner's approval for keeping consented images is needed before go-live (item below).
 
 Approved by (system owner): ____________   Cybersecurity: ____________   Date: ____________

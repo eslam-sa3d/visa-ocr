@@ -33,3 +33,16 @@ It prints per-field accuracy, the share sent to review, and silent-wrong cases. 
 `config/id_labels.json` for any field that is missed, re-run, and repeat. Keep `VISUAL_ZONE_AUTO_ACCEPT=false` until
 the silent-wrong rate is accepted in writing. A new country usually also needs code: its date format, ID-number rule
 and name layout. That work cannot start without the specimens.
+
+## Fronts of other residence cards (app/permits.py)
+
+| Card | Recognised by | Fields read | Confirmation |
+|---|---|---|---|
+| EU uniform-format residence permit (member states, Norway, Switzerland) | its title in the national language or "RESIDENCE PERMIT" | card number, surname, given names, sex, nationality, date of birth, expiry, type of permit | none: always reviewed |
+| UK biometric residence permit | "RESIDENCE PERMIT" with UK wording | card number, name, expiry, type of permit | none: always reviewed |
+| US Permanent Resident Card | "PERMANENT RESIDENT" with "UNITED STATES" or "USCIS" | USCIS number, surname, given name, sex, date of birth, expiry, category, country of birth | none: always reviewed |
+| Omani resident or identity card | "SULTANATE OF OMAN" with a civil number label | civil number, date of birth, expiry | none: always reviewed |
+
+On the 85 sample images the card was recognised on 79 and three or more fields were read on 65. These counts say the fields
+were found, not that their values are right: nobody has checked them against the cards. The back of these cards carries an
+MRZ and is the better upload.

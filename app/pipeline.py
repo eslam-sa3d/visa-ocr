@@ -14,6 +14,7 @@ from .engines.base import Engine, EngineOutput
 from .mrz import MrzError, parse_mrz, plausible_reading
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
+from .permits import FOUND_FIELDS, parse_permit
 from .visual_zone import gulf_evidence, hijri_expiry_flag, parse_gcc_id
 
 log = logging.getLogger("visa-ocr")
@@ -72,7 +73,7 @@ def _with_retake(result: dict, clarity) -> dict:
     doc = result.get("document") or {}
     checks = doc.get("checks") or {}
     card = doc.get("format") == "visual"
-    unclear = any(v is False for v in checks.values()) or (card and not doc.get("idNumber"))
+    unclear = any(v is False for v in checks.values()) or (card and not (doc.get("idNumber") or doc.get("documentNumber")))
     if unclear:
         reasons = list(clarity.doubts) + ["card_unclear" if card else "mrz_unclear"]
         result["retake"] = quality.retake(reasons)
@@ -180,6 +181,17 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
             log.info("lines shaped like an MRZ were not one (no document type letter or dates); treated as no MRZ")
             output.mrz_lines, mrz_confidence = None, None
 
+        if not output.mrz_lines and text_lines:
+            # The front of a European, UK or US residence card, or an Omani card: no MRZ and no check digit on that side.
+            # Read from its printed labels and always sent to a person. Gulf cards that name another state, or carry Arabic
+            # print without naming Oman, are left to the Gulf reader below.
+            named_states, _ = gulf_evidence(text_lines)
+            permit = None if (named_states - {"OMN"}) else parse_permit(text_lines[:config.max_text_lines()])
+            if permit and sum(1 for k in FOUND_FIELDS if permit["document"].get(k)) >= 3:
+                a_flags, _ = compare_applicant(permit["document"], applicant)
+                permit["flags"] += [f.to_dict() for f in a_flags]
+                permit["engine"], permit["fields"] = output.engine, _fields_out(output)
+                return "done", _with_retake(permit, clarity)
         if not output.mrz_lines and text_lines:
             result = parse_gcc_id(text_lines[:config.max_text_lines()])      # bounded: parsing cost grows with the line count
             result = _fill_from_second_reader(result, images, output.engine)

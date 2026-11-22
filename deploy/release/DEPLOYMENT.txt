@@ -66,9 +66,14 @@ BEFORE YOU START
    Logs      docker logs visa-ocr            application log; holds no document data
              /var/log/visa-ocr/audit.log     security events, one JSON line each: send to your SIEM
    Health    /healthz for liveness, /readyz for readiness (both need no key)
-   Data      Results are deleted after 60 minutes and are encrypted while stored. Nothing is kept longer: training-data
-             collection is off in this set-up.
-   Backup    Nothing in the data volume needs backing up. Keep /etc/visa-ocr in your secret store.
+   Data      Results are deleted after 60 minutes and are encrypted while stored.
+   Training  Collection is ON: for uploads the portal sends with consent_training=true, the images and the reviewers'
+             corrections are kept encrypted under /data/training for 30 days (TRAINING_RETENTION_DAYS). Uploads without
+             consent are never kept. To switch it off, remove TRAINING_STORE_DIR from production/visa-ocr.env.
+             A correction counts only after a second person approves it. Retraining runs on a separate training machine
+             and a new model is activated only if it beats the current one on the golden set: docs/MODEL_TRAINING.md.
+   Backup    Back up nothing from the data volume except /data/training if you want to keep corrections beyond a server
+             loss. Keep /etc/visa-ocr in your secret store.
    Update    Load the new image, set the new IMAGE_TAG, `docker compose up -d`. To go back, use the old tag.
    Scale     Run more containers behind your load balancer; for a shared queue set DATABASE_URL to a PostgreSQL database.
 
@@ -86,5 +91,6 @@ OPEN BEFORE GO-LIVE (tell your security and business owners; details and owners 
   - No independent penetration test or second-person source code review.
   - Not a statement of compliance with NCA controls; docs/NCA_CONTROLS.md lists what the service does and what must be
     supplied around it.
-  - Reads the document side that carries the MRZ, and Saudi and GCC ID cards. It does not read the front of European,
-    UK or US residence permits.
+  - The front of European, UK and US residence cards and Omani cards is read from printed text with nothing to confirm
+    it: every such reading goes to review. It was built against about 85 sample images and its values have not been
+    checked by a person. Ask applicants for the MRZ side when the card has one.

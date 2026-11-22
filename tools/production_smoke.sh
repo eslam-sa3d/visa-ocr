@@ -22,7 +22,7 @@ docker run -d --name "$NAME" --network none --read-only --tmpfs /tmp --cap-drop 
   -v "$(cd "$(dirname "$SAMPLE")" && pwd)/$(basename "$SAMPLE"):/tmp/sample:ro" \
   -e PRODUCTION=1 -e API_KEYS_FILE=/etc/visa-ocr/keys.json -e DATA_KEY_FILE=/etc/visa-ocr/data.key -e DATA_CIPHER=aes256gcm \
   -e JOB_DB_PATH=/data/jobs.db -e TLS_CERT=/etc/visa-ocr/tls/server.crt -e TLS_KEY=/etc/visa-ocr/tls/server.key \
-  -e AUDIT_LOG_FILE=/var/log/visa-ocr/audit.log -e RATE_LIMIT_PER_MIN=0 "$IMAGE" >/dev/null
+  -e AUDIT_LOG_FILE=/var/log/visa-ocr/audit.log -e RATE_LIMIT_PER_MIN=0 -e TRAINING_STORE_DIR=/data/training "$IMAGE" >/dev/null
 OUT="$(docker exec -i -e PORTAL_KEY="$PORTAL_KEY" "$NAME" python - <<'PY'
 import io, json, os, sqlite3, ssl, time, urllib.error, urllib.request, uuid
 from PIL import Image

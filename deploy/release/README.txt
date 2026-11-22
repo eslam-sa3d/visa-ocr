@@ -35,6 +35,7 @@ What is inside
 
 Known limits
   Built for linux/amd64. On an ARM machine it runs emulated and slowly; that is for trying it only.
-  Reads the side of a document that carries the MRZ, and Saudi and GCC ID cards. It does not read the front of European,
-  UK or US residence permits.
+  Passports, visas and cards are read from the side that carries the MRZ, where check digits confirm the reading.
+  Saudi, UAE, Kuwait, Qatar, Bahrain and Oman cards, and the FRONT of European, UK and US residence cards, are read from
+  their printed text. Those sides have no check digit, so every such reading goes to a person for review.
   Open before go-live: see GO_LIVE_RECORD.md.
