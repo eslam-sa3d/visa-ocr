@@ -113,7 +113,9 @@ class AutoEngine:
             return None
         if seen is not None:
             seen.append(first)            # kept even when it is not the answer: it may confirm PaddleOCR's reading later
-        agree = ((first.fields or {}).get("readers") or {}).get("agree")
+        # Full agreement only: the readers agreeing on line 2 alone leaves the name read once, and that needs the page.
+        from .ensemble import _ALL_FIELDS
+        agree = set(_ALL_FIELDS) <= set((first.fields or {}).get("agreedFields") or [])
         if first.mrz_lines and agree and check_score(first.mrz_lines)[1]:
             try:
                 # a second document in the photo is for the whole-page read to see and report

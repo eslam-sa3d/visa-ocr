@@ -15,7 +15,7 @@ from .engines.base import Engine, EngineOutput
 from .mrz import MrzError, parse_mrz, plausible_reading, second_mrz
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
-from .permits import FOUND_FIELDS, parse_permit
+from .permits import FOUND_FIELDS, parse_permit, says_it_is_a_passport
 from .visual_zone import gulf_evidence, hijri_expiry_flag, parse_gcc_id
 
 log = logging.getLogger("visa-ocr")
@@ -216,7 +216,9 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
                 return "done", _with_retake(permit, clarity)
         if not output.mrz_lines and text_lines:
             result = parse_gcc_id(text_lines[:config.max_text_lines()])      # bounded: parsing cost grows with the line count
-            result = _fill_from_second_reader(result, images, output.engine)
+            says_passport = says_it_is_a_passport(text_lines)
+            if "idNumber" in result["document"] or not says_passport:      # no second reading for a page that is no card
+                result = _fill_from_second_reader(result, images, output.engine)
             doc = result["document"]
             found = [k for k in ("idNumber", "nameAr", "nameEn", "nationality", "occupation", "birthDate", "expiryDate", "employer")
                      if doc.get(k)]
@@ -226,7 +228,9 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             # one stray Arabic letter read out of background noise is not Arabic print: ask for a few words' worth
             arabic = sum("\u0600" <= ch <= "\u06ff" for l in text_lines for ch in str(l.get("text", "")))
             gulf = bool(named or labelled_gulf or arabic >= 8)
-            if "idNumber" in doc or (len(found) >= 3 and gulf):
+            # A page that says it is a passport is not a card, whatever labels were read from it: its MRZ was not found, and
+            # the applicant is asked for a better photo. (An Arabic passport has Arabic print and the same labels as a card.)
+            if "idNumber" in doc or (len(found) >= 3 and gulf and not says_passport):
                 a_flags, _ = compare_applicant(doc, applicant)
                 result["flags"] += [f.to_dict() for f in a_flags]
                 result["needsReview"] = any(f["severity"] == "error" for f in result["flags"])

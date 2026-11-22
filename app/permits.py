@@ -75,6 +75,13 @@ def _box(line: dict) -> tuple[float, float, float, float]:
 _NOT_A_CARD_FRONT = re.compile(r"passport|passeport|pasaporte|passaporte|reisepass|paspoort|paszport|جواز")
 
 
+def says_it_is_a_passport(lines: list[dict]) -> bool:
+    """True when the printed text names the document a passport (in the languages seen on passports, Arabic included)."""
+    # "Passport No." on a residence card is a field label, not the document's title
+    return any(_NOT_A_CARD_FRONT.search(t) and not re.search(r"\bno\b|number|n°|\bnr\b|رقم", t)
+               for t in (str(l.get("text", "")).lower() for l in lines))
+
+
 def kind_of(lines: list[dict]) -> str | None:
     """Which of the supported cards the printed text belongs to, or None. A page that says it is a passport, or that shows
     part of an MRZ (lines of capitals with '<' fillers), is never a card front: its MRZ was simply not read, and the right

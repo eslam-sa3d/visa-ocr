@@ -1260,7 +1260,9 @@ def test_clear_document_is_answered_by_the_pair_without_paddle(monkeypatch):
         def extract(self, images, hint):
             calls.append(("pair", config.ocr_deadline()))
             return EngineOutput(engine="ensemble", mrz_lines=self.lines, mrz_confidence=0.99,
-                                fields={"readers": {"agree": self.agree}}, confidence=0.9)
+                                fields={"readers": {"agree": self.agree}, "agreedFields": {
+                                    True: ["documentNumber", "nationality", "sex", "issuingState", "documentType", "names"],
+                                    "line 2": ["documentNumber", "nationality", "sex"]}.get(self.agree, [])}, confidence=0.9)
 
     def run(pair, hint=None):
         calls.clear()
@@ -1270,6 +1272,7 @@ def test_clear_document_is_answered_by_the_pair_without_paddle(monkeypatch):
     assert run(Pair(good, True)).engine == "ensemble" and calls == [("pair", config.fast_first_seconds())]
     assert run(Pair(good, False)).engine == "paddle-ocr" and "paddle" in calls          # readers differ
     assert run(Pair(bad, True)).engine == "paddle-ocr"                                  # a check digit fails
+    assert run(Pair(good, "line 2")).engine == "paddle-ocr"                             # the name was read by one reader only
     assert run(Pair(None, False)).engine == "paddle-ocr"
     assert run(Pair(good, True), "gcc_id").engine == "paddle-ocr" and calls[0] == "paddle"     # a card: no MRZ expected
 
@@ -1455,3 +1458,30 @@ def test_emirates_id_name_in_both_scripts_and_clean_nationality():
     assert d["nameEn"] == "Sara Ahmed Ali" and d["nationality"] == "Egypt" and d["nationalityCode"] == "EGY"
     only_header = parse_gcc_id([lines[0], lines[2], lines[3]])["document"]
     assert "nameEn" not in only_header
+
+
+def test_arabic_passport_without_its_mrz_is_not_a_gulf_card():
+    """An Arabic passport page has Arabic print and card-like labels. When its MRZ is not found the answer is another photo,
+    not a card reading. A card that only mentions a passport number is still a card."""
+    import io
+    from PIL import Image
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.permits import says_it_is_a_passport
+    from app.review import Applicant
+    assert says_it_is_a_passport([{"text": "جواز سفر"}]) and says_it_is_a_passport([{"text": "PASSPORT"}])
+    assert not says_it_is_a_passport([{"text": "Passport No. A1234567"}]) and not says_it_is_a_passport([{"text": "رقم الجواز"}])
+
+    class Reader:
+        name = "paddle-ocr"
+        def __init__(self, title):
+            self.title = title
+        def extract(self, images, hint):
+            texts = [self.title, "الجمهورية العربية", "Name: Sample Person", "Nationality: Egypt", "Date of Birth: 05/03/1990",
+                     "Expiry Date: 11/06/2030", "المهنة مهندس برمجيات"]
+            return EngineOutput(engine=self.name, fields={"textLines": [{"text": t, "score": 0.98} for t in texts]}, mrz_searched=True)
+    b = io.BytesIO(); Image.new("RGB", (400, 300), "white").save(b, "PNG")
+    status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader("جواز سفر"))
+    assert status == "failed" and res["code"] == "mrz_not_found"
+    status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader("بطاقة هوية"))
+    assert status == "done" and res["document"]["format"] == "visual"
