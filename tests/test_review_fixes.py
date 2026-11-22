@@ -1417,3 +1417,23 @@ def test_two_documents_in_one_photo_are_turned_back():
     assert status == "failed" and res["code"] == "multiple_documents" and res["retake"]["recommended"]
     status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader(one + ["PASSPORT"]))
     assert status == "done"
+
+
+def test_transparent_png_is_laid_on_white_without_a_warning():
+    """A palette PNG with transparency used to raise a Pillow warning in every reader and show its clear parts as black."""
+    import io
+    import warnings
+    from PIL import Image
+    from app.uploads import shrink_for_ocr
+    img = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+    img.paste((10, 10, 10, 255), (20, 20, 120, 60))
+    pal = img.convert("P", palette=Image.ADAPTIVE, colors=8)
+    b = io.BytesIO(); pal.save(b, "PNG", transparency=bytes([0] + [255] * 7))
+    for raw in (b.getvalue(), (lambda o: (img.save(o, "PNG"), o.getvalue())[1])(io.BytesIO())):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = Image.open(io.BytesIO(shrink_for_ocr(raw)))
+            assert out.mode == "RGB" and "transparency" not in out.info
+            out.convert("L")
+    plain = io.BytesIO(); Image.new("RGB", (300, 200), "white").save(plain, "PNG")
+    assert shrink_for_ocr(plain.getvalue()) == plain.getvalue()       # ordinary small images are still untouched

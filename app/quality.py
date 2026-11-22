@@ -64,7 +64,10 @@ def measure(raw: bytes) -> Quality:
         import cv2
         import numpy as np
         from PIL import Image, ImageOps
-        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("L")
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+        if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:       # transparent parts are white paper, not black
+            img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img.convert("RGBA"))
+        img = img.convert("L")
     except Exception:  # noqa: BLE001 - not this module's failure to report
         return Quality()
     q = Quality(width=img.width, height=img.height)

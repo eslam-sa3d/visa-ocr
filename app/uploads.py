@@ -97,23 +97,33 @@ def shrink_for_ocr(data: bytes) -> bytes:
     """Bring a large photo down to the working size (WORK_MAX_SIDE, longest side in pixels). A 12-megapixel phone photo takes
     several times longer to read and several times the memory, for no gain: the readers work at about 1600 to 2400 pixels.
     The page is turned upright first (EXIF), so everything downstream sees one consistent image. Small images are returned
-    unchanged, byte for byte. A decoding problem also returns the original, so the normal error handling deals with it."""
+    unchanged, byte for byte, except an image with transparency, which is laid on white. A decoding problem also returns the original, so the normal error handling deals with it."""
     limit = config.work_max_side()
-    if limit <= 0:
-        return data
     try:
         from PIL import Image, ImageOps  # noqa: WPS433
         with Image.open(io.BytesIO(data)) as img:
-            if max(img.size) <= limit:
+            # A PNG with transparency (a screenshot, an image saved from a document) has no colour where it is transparent:
+            # readers that drop the transparency see those parts black. It is laid on white paper once, here.
+            see_through = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+            small = limit <= 0 or max(img.size) <= limit
+            if small and not see_through:
                 return data
-            if img.format == "JPEG":
+            if img.format == "JPEG" and not small:
                 img.draft("RGB", (limit, limit))            # decode at a reduced scale: several times faster
-            img = ImageOps.exif_transpose(img).convert("RGB")
-            ratio = limit / max(img.size)
+            img = ImageOps.exif_transpose(img)
+            if see_through:
+                img = img.convert("RGBA")
+                paper = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                img = Image.alpha_composite(paper, img)
+            img = img.convert("RGB")
+            ratio = 1 if small else limit / max(img.size)
             if ratio < 1:
                 img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))), Image.LANCZOS)
             out = io.BytesIO()
-            img.save(out, "JPEG", quality=92)
+            if small:
+                img.save(out, "PNG", compress_level=1)      # not shrunk: keep every pixel as it was
+            else:
+                img.save(out, "JPEG", quality=92)
             return out.getvalue()
     except Exception:  # noqa: BLE001
         return data
