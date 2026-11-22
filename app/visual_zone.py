@@ -164,7 +164,7 @@ def _classify(text: str) -> tuple[str | None, str]:
                 best = ((m.start(), -(m.end() - m.start())), field, m.end())
     if best is None:
         return None, ""
-    rest = re.sub(r"^[\s:：\-–/|]+", "", n[best[2]:]).strip()
+    rest = re.sub(r"^[\s:：\-–/|.,،]+", "", n[best[2]:]).strip()
     if not rest:                                     # some readers put the value before the label ("1988/11/02 تاريخ الميلاد")
         before = re.sub(r"[\s:：\-–/|]+$", "", n[:best[0][0]]).strip()
         rest = before
@@ -297,7 +297,7 @@ def _find_other_gcc_number(lines, labelled, named=frozenset(), labelled_gulf=Tru
     return None
 
 
-_HEADER_LATIN = {"KINGDOM", "SAUDI", "ARABIA", "PREMIUM", "RESIDENT", "IDENTITY", "RESIDENCY", "RESIDENCE", "PERMIT", "IQAMA",
+_HEADER_LATIN = {"FEDERAL", "AUTHORITY", "CITIZENSHIP", "CUSTOMS", "SECURITY", "SULTANATE", "KINGDOM", "SAUDI", "ARABIA", "PREMIUM", "RESIDENT", "IDENTITY", "RESIDENCY", "RESIDENCE", "PERMIT", "IQAMA",
                  "MINISTRY", "INTERIOR", "REPUBLIC", "NATIONAL", "CARD", "ID", "OF"}
 _HEADER_ARABIC = ("المملكه العربيه السعوديه", "هويه مقيم", "الاقامه المميزه", "رقم النسخه", "يجب التحقق", "وزاره الداخليه",
                   "بطاقه هويه", "الرمز السريع")
@@ -436,7 +436,8 @@ def _unlabelled_latin_name(c: _Card) -> dict | None:
         runs = re.findall(r"[A-Z][A-Z'\-]+(?: [A-Z][A-Z'\-]+)+", t)
         if runs:
             best = max(runs, key=len)
-            if len(best.split()) >= 2 and not _is_header_text(best):
+            # a state's name in capitals at the top of the card is not the holder's name
+            if len(best.split()) >= 2 and not _is_header_text(best) and not _resolve_country(best):
                 c.set("nameEn", best, ln)
                 return ln
     return None
@@ -471,6 +472,13 @@ def _read_names(c: _Card) -> None:
         name = None
     if name:
         c.set("nameAr" if _ARABIC.search(name[0]) else "nameEn", name[0], name[1])
+    # A card with the name in both scripts labels each one: the second label must not be passed over for an unlabelled guess.
+    for ln in c.lines:
+        field, rest = _classify(ln["text"])
+        if field == "name" and rest and not _is_header_text(rest):
+            key = "nameAr" if _ARABIC.search(rest) else "nameEn"
+            if key not in c.doc:
+                c.set(key, rest, ln)
     en_line = _unlabelled_latin_name(c) if "nameEn" not in c.doc else None
     if "nameAr" not in c.doc and en_line is not None:
         _arabic_name_above(c, en_line)

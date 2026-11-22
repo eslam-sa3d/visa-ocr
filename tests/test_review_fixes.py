@@ -1437,3 +1437,21 @@ def test_transparent_png_is_laid_on_white_without_a_warning():
             out.convert("L")
     plain = io.BytesIO(); Image.new("RGB", (300, 200), "white").save(plain, "PNG")
     assert shrink_for_ocr(plain.getvalue()) == plain.getvalue()       # ordinary small images are still untouched
+
+
+def test_emirates_id_name_in_both_scripts_and_clean_nationality():
+    """The Latin name has its own label further down the card: it is taken, not the state's name printed in capitals at the top.
+    A full stop read in place of the colon after "Nationality" is not part of the value."""
+    from app.gcc_ids import luhn_ok
+    from app.visual_zone import parse_gcc_id
+    n = next(f"78419801234567{d}" for d in "0123456789" if luhn_ok(f"78419801234567{d}"))
+    def L(text, x0, y0, x1, y1):
+        return {"text": text, "score": 0.98, "box": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}
+    lines = [L("UNITED ARAB EMIRATES", 35, 7, 348, 42), L("Resident Identity Card", 91, 68, 270, 94), L("ID Number/", 311, 119, 506, 155),
+             L(f"{n[:3]}-{n[3:7]}-{n[7:14]}-{n[14]}", 307, 149, 514, 178), L("الإسم سارة احمد علي", 525, 182, 782, 211),
+             L("Name: Sara Ahmed Ali", 264, 217, 633, 244), L("Nationality. Egypt", 260, 327, 420, 357)]
+    d = parse_gcc_id(lines)["document"]
+    assert d["nameEn"] == "Sara Ahmed Ali" and d["nameAr"] == "ساره احمد علي" or d["nameAr"].startswith("سار")
+    assert d["nameEn"] == "Sara Ahmed Ali" and d["nationality"] == "Egypt" and d["nationalityCode"] == "EGY"
+    only_header = parse_gcc_id([lines[0], lines[2], lines[3]])["document"]
+    assert "nameEn" not in only_header
