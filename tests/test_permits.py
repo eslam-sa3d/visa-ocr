@@ -104,3 +104,11 @@ def test_saudi_card_with_english_residence_permit_title_stays_with_the_gulf_read
              L("Date of birth", 0, 90, 120, 110), L("01/01/1990", 130, 90, 260, 110)]
     status, res = pipeline.run([b"x"], None, Applicant(), _Reader(lines))
     assert not (status == "done" and str(res.get("document", {}).get("kind", "")).endswith("residence_permit"))
+
+
+def test_a_passport_page_or_an_unread_mrz_is_never_a_card_front():
+    assert kind_of(DE) == "eu_residence_permit"
+    assert kind_of(DE + [L("PASSPORT / PASSEPORT", 0, 0, 200, 20)]) is None
+    assert kind_of(DE + [L("جواز سفر", 0, 0, 200, 20)]) is None
+    assert kind_of(DE + [L("IRFRAXXZ1AB2CD0<9924057566<<<<", 9, 1300, 753, 1340)]) is None
+    assert parse_permit(US + [L("C1USA0001112223<<<<<<<<<<<<<<<", 9, 400, 753, 430)], TODAY) is None

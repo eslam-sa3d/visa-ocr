@@ -1233,3 +1233,40 @@ def test_second_pair_is_limited_only_on_a_known_card_front(monkeypatch):
         monkeypatch.setattr(engines, "get_engine_by_name", lambda name, p=paddle: p if name == "paddle-ocr" else Pair())
         engines.AutoEngine().extract([b"x"], None)
     assert seen == [0, config.handover_seconds(), config.handover_seconds()] and config.handover_seconds() > 0
+
+
+@pytest.mark.fastfirst
+def test_clear_document_is_answered_by_the_pair_without_paddle(monkeypatch):
+    """Both readers agree and every check digit passes: that answer is returned and PaddleOCR is never called. Any doubt
+    (readers differ, a check digit fails, nothing found) goes to PaddleOCR as before."""
+    from app import config, engines
+    from app.engines.base import EngineOutput
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    bad = [good[0], good[1][:9] + "0" + good[1][10:]]
+    calls = []
+
+    class Paddle:
+        def extract(self, images, hint, deep=True):
+            calls.append("paddle")
+            return EngineOutput(engine="paddle-ocr", mrz_lines=good, mrz_confidence=0.999, fields={"textLines": [{"text": "x"}]}, confidence=0.9)
+        def mrz_retries(self, images, straighten=True):
+            return None, None
+
+    class Pair:
+        def __init__(self, lines, agree):
+            self.lines, self.agree = lines, agree
+        def extract(self, images, hint):
+            calls.append(("pair", config.ocr_deadline()))
+            return EngineOutput(engine="ensemble", mrz_lines=self.lines, mrz_confidence=0.99,
+                                fields={"readers": {"agree": self.agree}}, confidence=0.9)
+
+    def run(pair, hint=None):
+        calls.clear()
+        monkeypatch.setattr(engines, "get_engine_by_name", lambda name: Paddle() if name == "paddle-ocr" else pair)
+        return engines.AutoEngine().extract([b"x"], hint)
+
+    assert run(Pair(good, True)).engine == "ensemble" and calls == [("pair", config.fast_first_seconds())]
+    assert run(Pair(good, False)).engine == "paddle-ocr" and "paddle" in calls          # readers differ
+    assert run(Pair(bad, True)).engine == "paddle-ocr"                                  # a check digit fails
+    assert run(Pair(None, False)).engine == "paddle-ocr"
+    assert run(Pair(good, True), "gcc_id").engine == "paddle-ocr" and calls[0] == "paddle"     # a card: no MRZ expected

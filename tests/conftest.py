@@ -26,3 +26,12 @@ def _no_clarity_check(monkeypatch, request):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "clarity: run with the image clarity check on")
+    config.addinivalue_line("markers", "fastfirst: run with the quick first look by the pair on")
+
+
+@pytest.fixture(autouse=True)
+def _no_fast_first(monkeypatch, request):
+    """Tests of the "auto" order of readers were written for PaddleOCR reading first; the quick first look by the pair is
+    tested on its own with @pytest.mark.fastfirst."""
+    if "fastfirst" not in request.keywords:
+        monkeypatch.setenv("OCR_FAST_FIRST_SECONDS", "0")

@@ -71,9 +71,20 @@ def _box(line: dict) -> tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
+_NOT_A_CARD_FRONT = re.compile(r"passport|passeport|pasaporte|passaporte|reisepass|paspoort|paszport|جواز")
+
+
 def kind_of(lines: list[dict]) -> str | None:
-    """Which of the supported cards the printed text belongs to, or None."""
+    """Which of the supported cards the printed text belongs to, or None. A page that says it is a passport, or that shows
+    part of an MRZ (lines of capitals with '<' fillers), is never a card front: its MRZ was simply not read, and the right
+    answer is another photo, not a reading without check digits."""
     text = " | ".join(_plain(l.get("text", "")) for l in lines)
+    if _NOT_A_CARD_FRONT.search(text):
+        return None
+    for l in lines:
+        raw = re.sub(r"\s+", "", str(l.get("text", "")))
+        if len(raw) >= 20 and raw.count("<") >= 3:
+            return None
     for kind, (title, second) in _TITLES.items():
         if re.search(title, text) and (second is None or re.search(second, text)):
             return kind

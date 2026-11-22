@@ -31,6 +31,9 @@ class AutoEngine:
 
     def extract(self, images, doc_type_hint):
         wants_mrz = doc_type_hint not in ("iqama", "gcc_id")
+        quick = self._fast_first(images, doc_type_hint) if wants_mrz else None
+        if quick is not None:
+            return quick
         try:
             paddle = get_engine_by_name(PaddleOcrEngine.name)
             # When an MRZ is expected, PaddleOCR's slow last-chance searches wait until the second pair has had its turn.
@@ -74,6 +77,26 @@ class AutoEngine:
         if out.mrz_lines:
             out = self._second_opinion(out, images, doc_type_hint)
         return out
+
+    @staticmethod
+    def _fast_first(images, doc_type_hint):
+        """The quick answer for a clear document: the pair's reading, when both readers agree and every check digit passes.
+        None in every other case (off, pair not installed, no MRZ, any doubt), and PaddleOCR then reads as usual."""
+        from .. import config
+        from ..mrz import check_score
+        limit = config.fast_first_seconds()
+        if limit <= 0:
+            return None
+        try:
+            get_engine_by_name(PaddleOcrEngine.name)          # no PaddleOCR: the pair is the whole reader anyway, unlimited
+            with config.limited_read(limit):
+                first = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
+        except Exception:  # noqa: BLE001 - the quick look is optional; any trouble means the normal path
+            return None
+        agree = ((first.fields or {}).get("readers") or {}).get("agree")
+        if first.mrz_lines and agree and check_score(first.mrz_lines)[1]:
+            return first
+        return None
 
     @staticmethod
     def _second_opinion(out, images, doc_type_hint):

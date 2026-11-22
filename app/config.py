@@ -104,6 +104,14 @@ def limited_read(seconds: float):
         _read_limit.reset(token)
 
 
+def fast_first_seconds() -> float:
+    """In "auto", the Tesseract + RapidOCR pair gets this long to read the MRZ BEFORE PaddleOCR is tried (0 = off: PaddleOCR
+    always reads first). The pair's answer is taken only when both readers give the same lines and every check digit
+    passes, which is the strongest evidence there is; anything less goes on to PaddleOCR as before. A clear passport is
+    answered in a couple of seconds this way instead of waiting for a whole-page read in two languages."""
+    return max(0.0, _float("OCR_FAST_FIRST_SECONDS", 3.0))
+
+
 def handover_seconds() -> float:
     """Limit for the Tesseract + RapidOCR pair when "auto" calls it after PaddleOCR has already read the page (0 = none).
     PaddleOCR has the page text and has turned a sideways photo upright by then, so the pair only has to look for an MRZ:
