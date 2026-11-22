@@ -1196,3 +1196,13 @@ def test_tighter_of_two_limits_applies(monkeypatch):
         assert config.ocr_deadline() == 2
     with config.limited_read(1):
         assert config.ocr_deadline() == 1
+
+
+def test_paddle_reports_where_the_mrz_lines_are():
+    from app.engines.paddle_ocr import _mrz_line_boxes
+    mrz = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    def line(text, y):
+        return {"image": 0, "text": text, "box": [[40, y], [900, y], [900, y + 30], [40, y + 30]]}
+    lines = [line("PASSPORT", 10), line(mrz[0].replace("<<<<", "<< <<", 1), 500), line(mrz[1], 540)]
+    assert _mrz_line_boxes(mrz, lines) == [{"image": 0, "box": [40, 500, 901, 531]}, {"image": 0, "box": [40, 540, 901, 571]}]
+    assert _mrz_line_boxes(mrz, lines[:2]) is None and _mrz_line_boxes(None, lines) is None

@@ -75,6 +75,26 @@ PIPELINE_DETECTION = {"limit_side_len": 64, "limit_type": "min", "thresh": 0.3, 
                       "unclip_ratio": 1.5}
 
 
+def _mrz_line_boxes(mrz: list[str] | None, lines: list[dict]) -> list[dict] | None:
+    """Where each MRZ line sits on the uploaded image (x1, y1, x2, y2), from the text lines read on the page. A reviewer's
+    correction is saved with this box so the line can be cut out for training. None unless every line is matched to its own
+    box on one image."""
+    import difflib
+    if not mrz:
+        return None
+    boxes, used = [], set()
+    for wanted in mrz:
+        ranked = sorted(((difflib.SequenceMatcher(None, wanted, clean_line(l["text"])).ratio(), i) for i, l in enumerate(lines)
+                         if i not in used and len(l.get("box") or []) == 4), reverse=True)
+        if not ranked or ranked[0][0] < 0.8:
+            return None
+        i = ranked[0][1]
+        used.add(i)
+        xs, ys = [p[0] for p in lines[i]["box"]], [p[1] for p in lines[i]["box"]]
+        boxes.append({"image": lines[i]["image"], "box": [int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1]})
+    return boxes if len({b["image"] for b in boxes}) == 1 else None
+
+
 class SharedReader:
     """One text detector and one recogniser per language: the text boxes are found once and each recogniser reads the same
     crops. The usual pipeline (one PaddleOCR object per language) finds the boxes again for every language, which is most
@@ -454,6 +474,7 @@ class PaddleOcrEngine:
         out = self._finish(images, lines, readers, used_models, np, Image, ImageOps, deep)
         if any(a is not b for a, b in zip(images, given)):
             out.upright_images = list(images)
+            (out.fields or {}).pop("mrzLineBoxes", None)      # positions on the turned page do not fit the stored upload
         return out
 
     @staticmethod
@@ -564,10 +585,14 @@ class PaddleOcrEngine:
         # every language reader reads every box; keep the best reading per box (per image)
         lines = [l for i in range(len(images)) for l in dedupe_overlapping([x for x in lines if x["image"] == i])]
         scores = [l["score"] for l in lines if l["score"] is not None]
+        fields = {"textLines": lines, "models": used_models}
+        boxes = _mrz_line_boxes(mrz, lines)
+        if boxes:
+            fields["mrzLineBoxes"] = boxes
         return EngineOutput(
             engine=self.name,
             mrz_lines=mrz,
             mrz_confidence=mrz_conf,
-            fields={"textLines": lines, "models": used_models},
+            fields=fields,
             confidence=round(sum(scores) / len(scores), 4) if scores else None,
         )

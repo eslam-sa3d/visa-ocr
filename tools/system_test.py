@@ -204,10 +204,22 @@ def functional(api: Api, a) -> None:
         j = api.read([png_bytes(), data])
         assert j["status"] == "done" and j["result"]["document"]["documentNumber"] == truth["documentNumber"]
 
-    @check(g, "blank page fails with mrz_not_found and a usable message")
+    @check(g, "blank page is turned back with a message asking for another photo")
     def _():
         j = api.read([png_bytes((900, 600))], {"doc_type_hint": "passport"})
-        assert j["status"] == "failed" and j["error"]["code"] == "mrz_not_found" and len(j["error"]["message"]) > 20
+        assert j["status"] == "failed" and j["error"]["code"] in ("image_unclear", "mrz_not_found"), j.get("error")
+        assert len(j["error"]["message"]) > 20 and j["error"]["retake"]["recommended"] is True
+        assert j["error"]["retake"]["message"] and j["error"]["retake"]["reasons"]
+
+    @check(g, "instant photo check: a clear photo passes, a blank one is turned back, nothing is queued")
+    def _():
+        data, _, _ = make_doc("TD3", 6300)
+        good = api.post("/v1/documents/check", files={"file": ("a.png", data, "image/png")})
+        assert good.status_code == 200 and good.json()["acceptable"] is True, good.text[:200]
+        bad = api.post("/v1/documents/check", files={"file": ("a.png", png_bytes((900, 600)), "image/png")})
+        assert bad.status_code == 200 and bad.json()["acceptable"] is False and bad.json()["retake"]["message"]
+        assert api.post("/v1/documents/check", files={"file": ("a.png", b"<html>", "image/png")}).status_code == 415
+        assert api.post("/v1/documents/check", files={"file": ("a.png", data, "image/png")}, key=None).status_code in (401, 403)
 
     @check(g, "/v1/mrz/parse: valid lines parse; a changed digit fails its check; nonsense is refused")
     def _():
@@ -383,7 +395,7 @@ def security_checks(api: Api, a) -> None:
         poly = api.upload([png_bytes() + b"<script>alert(1)</script>" + b"PK\x03\x04" + b"\x00" * 100], ctype="image/png")
         assert poly.status_code == 202                  # a valid PNG with trailing bytes is just an image: it must not crash
         j = api.wait(poly.json()["jobId"])
-        assert j["status"] == "failed" and j["error"]["code"] in ("mrz_not_found", "invalid_image")
+        assert j["status"] == "failed" and j["error"]["code"] in ("mrz_not_found", "invalid_image", "image_unclear")
         assert api.get("/healthz", key=None).status_code == 200
 
     @check(g, "corrupt image body ends as a clean failed job, not a crash or a stack trace")

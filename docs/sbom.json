@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-11-18T13:31:05+00:00",
+ "generatedAt": "2026-11-22T06:57:15+00:00",
  "lockFile": "requirements.lock",
  "python": "3.13.18",
  "packages": [
@@ -7,25 +7,25 @@
    "name": "aiohappyeyeballs",
    "version": "2.7.1",
    "hashes": 2,
-   "licence": "PSF-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "aiohttp",
    "version": "3.14.5",
    "hashes": 161,
-   "licence": "Apache-2.0 AND MIT"
+   "licence": "not installed here"
   },
   {
    "name": "aiosignal",
    "version": "1.4.0",
    "hashes": 2,
-   "licence": "Apache 2.0"
+   "licence": "not installed here"
   },
   {
    "name": "aistudio-sdk",
    "version": "0.3.9",
    "hashes": 1,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "annotated-doc",
@@ -55,7 +55,7 @@
    "name": "bce-python-sdk",
    "version": "0.9.79",
    "hashes": 2,
-   "licence": "Apache License 2.0"
+   "licence": "not installed here"
   },
   {
    "name": "certifi",
@@ -91,13 +91,13 @@
    "name": "colorlog",
    "version": "6.12.0",
    "hashes": 2,
-   "licence": "MIT License"
+   "licence": "not installed here"
   },
   {
    "name": "crc32c",
    "version": "2.9.post0",
    "hashes": 114,
-   "licence": "LGPL-2.1-or-later"
+   "licence": "not installed here"
   },
   {
    "name": "cryptography",
@@ -127,19 +127,19 @@
    "name": "frozenlist",
    "version": "1.8.0",
    "hashes": 130,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "fsspec",
    "version": "2026.9.0",
    "hashes": 2,
-   "licence": "BSD-3-Clause"
+   "licence": "not installed here"
   },
   {
    "name": "future",
    "version": "1.0.0",
    "hashes": 2,
-   "licence": "MIT"
+   "licence": "not installed here"
   },
   {
    "name": "h11",
@@ -151,7 +151,7 @@
    "name": "hf-xet",
    "version": "1.8.0",
    "hashes": 17,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "httpcore",
@@ -187,7 +187,7 @@
    "name": "huggingface-hub",
    "version": "2.4.0",
    "hashes": 2,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "idna",
@@ -199,25 +199,25 @@
    "name": "imagesize",
    "version": "2.0.1",
    "hashes": 2,
-   "licence": "MIT"
+   "licence": "not installed here"
   },
   {
    "name": "modelscope",
    "version": "1.40.3",
    "hashes": 2,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "modelscope-hub",
    "version": "0.7.1",
    "hashes": 2,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "multidict",
    "version": "7.2.1",
    "hashes": 151,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "networkx",
@@ -229,7 +229,7 @@
    "name": "numpy",
    "version": "2.3.5",
    "hashes": 74,
-   "licence": "Copyright (c) 2005-2025, NumPy Developers."
+   "licence": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
   },
   {
    "name": "onnxruntime",
@@ -247,7 +247,7 @@
    "name": "opencv-contrib-python-headless",
    "version": "4.10.0.84",
    "hashes": 7,
-   "licence": "Apache 2.0"
+   "licence": "not installed here"
   },
   {
    "name": "opencv-python",
@@ -265,7 +265,7 @@
    "name": "opt-einsum",
    "version": "3.3.0",
    "hashes": 2,
-   "licence": "MIT"
+   "licence": "not installed here"
   },
   {
    "name": "packaging",
@@ -277,25 +277,25 @@
    "name": "paddleocr",
    "version": "3.7.0",
    "hashes": 2,
-   "licence": "Apache License 2.0"
+   "licence": "not installed here"
   },
   {
    "name": "paddlepaddle",
    "version": "3.3.1",
    "hashes": 15,
-   "licence": "Apache Software License"
+   "licence": "not installed here"
   },
   {
    "name": "paddlex",
    "version": "3.7.2",
    "hashes": 2,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "pandas",
    "version": "3.1.1",
    "hashes": 58,
-   "licence": "BSD-3-Clause"
+   "licence": "BSD 3-Clause License"
   },
   {
    "name": "pillow",
@@ -307,13 +307,13 @@
    "name": "prettytable",
    "version": "3.19.0",
    "hashes": 2,
-   "licence": "BSD-3-Clause"
+   "licence": "not installed here"
   },
   {
    "name": "propcache",
    "version": "0.5.4",
    "hashes": 138,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "protobuf",
@@ -343,7 +343,7 @@
    "name": "py-cpuinfo",
    "version": "9.0.0",
    "hashes": 2,
-   "licence": "MIT"
+   "licence": "not installed here"
   },
   {
    "name": "pyclipper",
@@ -361,7 +361,7 @@
    "name": "pycryptodome",
    "version": "4.5.0",
    "hashes": 31,
-   "licence": "BSD-2-Clause AND Unlicense AND MIT"
+   "licence": "not installed here"
   },
   {
    "name": "pydantic",
@@ -397,13 +397,13 @@
    "name": "python-dateutil",
    "version": "4.0.0",
    "hashes": 2,
-   "licence": "BSD-3-Clause"
+   "licence": "Dual License"
   },
   {
    "name": "python-dotenv",
    "version": "1.2.4",
    "hashes": 2,
-   "licence": "not installed here"
+   "licence": "BSD-3-Clause"
   },
   {
    "name": "python-multipart",
@@ -433,13 +433,13 @@
    "name": "ruamel-yaml",
    "version": "0.19.1",
    "hashes": 2,
-   "licence": "MIT"
+   "licence": "not installed here"
   },
   {
    "name": "safetensors",
    "version": "0.8.0",
    "hashes": 17,
-   "licence": "Apache Software License"
+   "licence": "not installed here"
   },
   {
    "name": "shapely",
@@ -463,7 +463,7 @@
    "name": "tqdm",
    "version": "4.70.1",
    "hashes": 2,
-   "licence": "MPL-2.0 AND MIT"
+   "licence": "not installed here"
   },
   {
    "name": "truststore",
@@ -487,13 +487,13 @@
    "name": "tzdata",
    "version": "2026.6",
    "hashes": 2,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "ujson",
    "version": "6.1.0",
    "hashes": 125,
-   "licence": "BSD-3-Clause AND TCL"
+   "licence": "not installed here"
   },
   {
    "name": "urllib3",
@@ -523,7 +523,7 @@
    "name": "wcwidth",
    "version": "0.9.4",
    "hashes": 29,
-   "licence": "MIT License"
+   "licence": "not installed here"
   },
   {
    "name": "websockets",
@@ -535,7 +535,7 @@
    "name": "yarl",
    "version": "1.25.1",
    "hashes": 138,
-   "licence": "Apache-2.0"
+   "licence": "not installed here"
   },
   {
    "name": "setuptools",
@@ -546,7 +546,7 @@
  ],
  "unpinned": [],
  "vulnerabilityCheck": {
-  "checkedAt": "2026-11-18T13:31:05+00:00",
+  "checkedAt": "2026-11-22T06:57:15+00:00",
   "packagesChecked": 90,
   "found": []
  }

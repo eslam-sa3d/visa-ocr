@@ -1,0 +1,32 @@
+# visa-ocr in production. Before the first start:
+#   1. docker load the image (README.txt in the release folder)
+#   2. python3 make_keys.py /etc/visa-ocr          (as root; prints the API keys once)
+#   3. put the organisation's certificate at /etc/visa-ocr/tls/server.crt and server.key
+#   4. mkdir -p /var/log/visa-ocr && chown 999 /var/log/visa-ocr    (999 is the service user inside the image; check with
+#      `docker run --rm --entrypoint id visa-ocr:TAG ocr`)
+#   The same set-up (read-only image, no capabilities, keys from a file, encrypted storage) is what
+#   tools/production_smoke.sh proves on the build host.
+#   5. review visa-ocr.env (lines marked DECIDE), then:  IMAGE_TAG=0.3.0-xxxxxxx docker compose up -d
+services:
+  visa-ocr:
+    image: visa-ocr:${IMAGE_TAG:?set IMAGE_TAG to the loaded image tag}
+    env_file: visa-ocr.env
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - visa-ocr-data:/data
+      - /etc/visa-ocr:/etc/visa-ocr:ro
+      - /var/log/visa-ocr:/var/log/visa-ocr
+    read_only: true                 # the image is never written to; only /data, the log folder and /tmp are
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits: {cpus: "4", memory: 8g}     # a starting point; size from tools/load_test.py on this server
+# The service never calls out. Block outbound traffic from this host at the firewall as well.
+volumes:
+  visa-ocr-data:

@@ -161,7 +161,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
         # A photo that is plainly unusable (black, blank, badly blurred, tiny) is turned back at once with what to do about
         # it. Reading it would only take longer to reach the same answer.
-        clarity = quality.worst(images) if config.quality_check() else quality.Quality()
+        clarity = quality.clearest(images) if config.quality_check() else quality.Quality()
         if clarity.issues:
             return "failed", {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
                               "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()}

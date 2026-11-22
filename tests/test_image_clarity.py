@@ -118,3 +118,16 @@ def test_portal_can_check_a_photo_at_once():
     soft = client.post("/v1/documents/check", files={"file": ("a.png", _page(blur=3), "image/png")}).json()
     assert soft["acceptable"] and not soft["clear"] and soft["retake"]["recommended"] is False
     assert client.post("/v1/documents/check", files={"file": ("a.png", b"junk", "image/png")}).status_code in (415, 422)
+
+
+@pytest.mark.clarity
+def test_one_clear_image_among_several_is_enough():
+    """Two images in one upload (both sides of a card, or a second try): a blank one beside a clear one is not a reason
+    to turn the upload back."""
+    out = io.BytesIO()
+    Image.new("RGB", (1200, 900), "white").save(out, format="PNG")
+    reader = _Reader(GOOD)
+    status, res = pipeline.run([out.getvalue(), _page()], None, Applicant(), reader)
+    assert status == "done" and reader.calls == 1 and "retake" not in res
+    status, res = pipeline.run([out.getvalue(), out.getvalue()], None, Applicant(), reader)
+    assert status == "failed" and res["code"] == "image_unclear"

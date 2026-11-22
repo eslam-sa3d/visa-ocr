@@ -8,8 +8,14 @@ PORT="${PORT:-443}"
 mkdir -p "${HOME:-/data/home}" 2>/dev/null || true
 # Same rule as app/security.py: a value made only of commas or spaces is not a key.
 KEYS_SET="$(printf '%s%s' "${API_KEYS:-}" "${API_KEY_SHA256:-}" | tr -d ', \t\r\n')"
-if [ -z "$KEYS_SET" ] && [ "${ALLOW_ANONYMOUS:-0}" != "1" ]; then
-  echo "ERROR: no usable API key is configured (API_KEYS or API_KEY_SHA256). Set one, or set ALLOW_ANONYMOUS=1 for local tests only." >&2
+# Keys with roles and expiry dates come from a file (the production set-up). The service itself checks what is in it.
+KEYS_FILE="$(printf '%s' "${API_KEYS_FILE:-}" | tr -d ' \t\r\n')"
+if [ -n "$KEYS_FILE" ] && [ ! -s "$KEYS_FILE" ]; then
+  echo "ERROR: API_KEYS_FILE is set to $KEYS_FILE, which is missing or empty. Mount the key file there." >&2
+  exit 1
+fi
+if [ -z "$KEYS_SET" ] && [ -z "$KEYS_FILE" ] && [ "${ALLOW_ANONYMOUS:-0}" != "1" ]; then
+  echo "ERROR: no usable API key is configured (API_KEYS_FILE, API_KEYS or API_KEY_SHA256). Set one, or set ALLOW_ANONYMOUS=1 for local tests only." >&2
   exit 1
 fi
 if [ -z "$KEYS_SET" ]; then unset API_KEYS API_KEY_SHA256; fi     # anonymous mode was chosen: drop blank values

@@ -109,12 +109,13 @@ def _glare(grey, cv2, np) -> float:
     return area / grey.size
 
 
-def worst(images: list[bytes]) -> Quality:
-    """The measures of the least clear image of an upload (the one a retake message should be about)."""
+def clearest(images: list[bytes]) -> Quality:
+    """The measures of the clearest image of an upload. An upload may carry several images (both sides of a card, or a second
+    try): one good image is enough to read from, so the upload is only turned back when every image is unusable."""
     best: Quality | None = None
     for raw in images:
         q = measure(raw)
-        if best is None or (len(q.issues), len(q.doubts)) > (len(best.issues), len(best.doubts)):
+        if best is None or (len(q.issues), len(q.doubts)) < (len(best.issues), len(best.doubts)):
             best = q
     return best or Quality()
 
