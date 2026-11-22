@@ -1206,3 +1206,30 @@ def test_paddle_reports_where_the_mrz_lines_are():
     lines = [line("PASSPORT", 10), line(mrz[0].replace("<<<<", "<< <<", 1), 500), line(mrz[1], 540)]
     assert _mrz_line_boxes(mrz, lines) == [{"image": 0, "box": [40, 500, 901, 531]}, {"image": 0, "box": [40, 540, 901, 571]}]
     assert _mrz_line_boxes(mrz, lines[:2]) is None and _mrz_line_boxes(None, lines) is None
+
+
+def test_second_pair_is_limited_only_on_a_known_card_front(monkeypatch):
+    """An unknown page with no MRZ found gets the pair's full search; a recognised card front gets the limited one."""
+    from app import config, engines
+    from app.engines.base import EngineOutput
+    seen = []
+
+    class Paddle:
+        def __init__(self, lines):
+            self.lines = lines
+        def extract(self, images, hint, deep=True):
+            return EngineOutput(engine="paddle-ocr", mrz_lines=None, fields={"textLines": self.lines}, confidence=0.9)
+        def mrz_retries(self, images, straighten=True):
+            return None, None
+
+    class Pair:
+        def extract(self, images, hint):
+            seen.append(config.ocr_deadline())
+            return EngineOutput(engine="ensemble", mrz_lines=None, fields={}, confidence=0.5)
+
+    for lines in ([{"text": "PASSEPORT"}, {"text": "REPUBLIQUE"}], [{"text": "KINGDOM OF BAHRAIN"}, {"text": "IDENTITY CARD"}],
+                  [{"text": "PERMANENT RESIDENT"}, {"text": "UNITED STATES OF AMERICA"}]):
+        paddle = Paddle(lines)
+        monkeypatch.setattr(engines, "get_engine_by_name", lambda name, p=paddle: p if name == "paddle-ocr" else Pair())
+        engines.AutoEngine().extract([b"x"], None)
+    assert seen == [0, config.handover_seconds(), config.handover_seconds()] and config.handover_seconds() > 0

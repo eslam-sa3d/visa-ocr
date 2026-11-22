@@ -11,7 +11,7 @@ The build does not finish unless both proofs pass, so a release folder that exis
 
 | Check | Result | Proof |
 |---|---|---|
-| Automated tests | 354 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
+| Automated tests | 355 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
 | Static check | clean | `python -m pyflakes app training tools tests deploy` |
 | System test, production reader, training on | 34 of 34 | `tools/system_test.py --training` |
 | System test, production set-up (`PRODUCTION=1`, key file, AES-256-GCM, TLS, audit log) | 33 of 33, 1 skipped (training is off) | `tools/system_test.py --insecure` against the entrypoint |
@@ -20,7 +20,7 @@ The build does not finish unless both proofs pass, so a release folder that exis
 | Offline start and read, test mode | PASS at build | `BUILD_INFO.txt` (`tools/offline_smoke.sh`) |
 | Production set-up in the real image, offline: keys with roles from a file, a request with no key refused, the portal key barred from listing models, a blank photo turned back with a retake message, stored result encrypted, audit log written, read-only image | PASS at build | `BUILD_INFO.txt` (`tools/production_smoke.sh`) |
 | Base image pinned by digest | recorded at build | `BUILD_INFO.txt` |
-| Real images, production reader | 432 images; 257 to 259 of 286 passports and visas pass every check digit; none accepted wrongly against the provisional answers | `tools/read_folder.py`, `tools/accuracy_real.py` |
+| Real images, production reader | 432 images; 257 to 259 of 286 passports and visas pass every check digit; none accepted wrongly against the provisional answers; 51 of 75 permit fronts and 7 of 10 Omani cards read from printed text (all sent to review) | `tools/read_folder.py`, `tools/accuracy_real.py` |
 
 Document types read: passports, visas and ID cards from the MRZ side; Saudi, UAE, Kuwait, Qatar, Bahrain and Oman cards
 and the front of European, UK and US residence cards from printed text (always reviewed; built against about 85 sample

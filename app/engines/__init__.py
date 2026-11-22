@@ -50,9 +50,11 @@ class AutoEngine:
         has_text = bool(out.fields.get("textLines"))
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
             try:
-                # the page text is in hand when PaddleOCR read something: the pair then only looks for an MRZ, within a limit
+                # The pair gets a time limit only when the page is already known to be a card front with no MRZ (a Gulf
+                # card or a residence-card front): a full search there finds nothing and costs twenty seconds. On any other
+                # page the pair searches in full: with a limit it reads less thoroughly, and that lost passports it could read.
                 from .. import config
-                with config.limited_read(config.handover_seconds() if has_text else 0):
+                with config.limited_read(config.handover_seconds() if _card_front(out) else 0):
                     second = get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
             except EngineUnavailable:
                 second = None
@@ -100,6 +102,18 @@ class AutoEngine:
         if s_sec > s_out:
             return second
         return out
+
+
+def _card_front(out) -> bool:
+    """True when the text PaddleOCR read shows a card side that carries no MRZ: it names a Gulf state or carries a Gulf ID
+    label, or it has the title of a residence card."""
+    lines = (out.fields or {}).get("textLines") or []
+    if not lines:
+        return False
+    from ..permits import kind_of
+    from ..visual_zone import gulf_evidence
+    named, labelled = gulf_evidence(lines)
+    return bool(named or labelled or kind_of(lines))
 
 
 def _mrz_trace(out) -> bool:
