@@ -582,14 +582,25 @@ def plausible_reading(lines: list[str] | None) -> bool:
 def _alike(a: str, b: str) -> bool:
     """True when two cleaned lines are readings of the same printed line (a few characters may differ)."""
     from difflib import SequenceMatcher
+    if a[:1] != b[:1] and a[:1] in "PV" and b[:1] in "PV":
+        return False            # a passport's name line and a visa's, of the same person: two documents
     # compared without the filler: two different people's lines are mostly filler and look alike with it
     a, b = a.replace(FILLER, ""), b.replace(FILLER, "")
     return bool(a) and bool(b) and SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.8
 
 
+def _data_lines(lines: list[str]) -> list[str]:
+    """The lines that carry the number and the dates (not the name line): line 2 of two, lines 1 and 2 of three."""
+    cleaned = [clean_line(l) for l in lines]
+    return cleaned[:2] if len(cleaned) == 3 else cleaned[1:]
+
+
 def same_zone(lines: list[str], known: list[str]) -> bool:
-    """True when every one of `lines` is a reading of one of the `known` MRZ lines."""
-    return all(any(_alike(clean_line(l), clean_line(k)) for k in known) for l in lines)
+    """True when two readings are of the same MRZ. The number-and-dates line decides: it is the same in every reading of one
+    document, however badly the name line was read, and different on any other document, even one of the same person."""
+    if len(lines) == 1:
+        return any(_alike(clean_line(lines[0]), clean_line(k)) for k in known)
+    return any(_alike(a, b) for a in _data_lines(lines) for b in _data_lines(known))
 
 
 def second_mrz(texts: list[str], known: list[str] | None) -> list[str] | None:

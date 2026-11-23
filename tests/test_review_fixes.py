@@ -1485,3 +1485,16 @@ def test_arabic_passport_without_its_mrz_is_not_a_gulf_card():
     assert status == "failed" and res["code"] == "mrz_not_found"
     status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader("بطاقة هوية"))
     assert status == "done" and res["document"]["format"] == "visual"
+
+
+def test_one_document_read_twice_differently_is_still_one_document():
+    """Nine real single passports were turned back as "two documents": the same MRZ read twice, with the name line read badly
+    in one of the readings. The number-and-dates line decides. A passport and a visa of the same person are still two."""
+    from app.mrz import same_zone, second_mrz
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    bad_name = ["PCUTOFRIKSS0NKKANNACMARLAKKKKSSSEEEKKKKKKKKK<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    assert same_zone(bad_name, good) and second_mrz(good + bad_name, good) is None
+    visa = ["V<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L8988901C4XXX4009078F96121096ZE184226B<<<<<<"]
+    assert not same_zone(visa, good) and second_mrz(good + visa, good) == visa
+    other = ["P<D<<MUSTERMANN<<ERIKA<<<<<<<<<<<<<<<<<<<<<<", "C01X00T478D<<6408125F2702283<<<<<<<<<<<<<<<4"]
+    assert not same_zone(other, good)
