@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Double-click to read every image in ~/Development/visa-ocr-testdata with the production readers and write the counts
-# (no personal data) to a new results folder beside it. Takes about an hour; keep the Mac awake. Stop the local service first.
+# Double-click to read every image in ~/Development/visa-ocr-testdata with the production readers and write the results to a
+# new results folder beside it. The folder holds what was read from the documents (sheet.csv): it is created for your account
+# only; delete it when the checking is done. Takes about an hour; keep the Mac awake. Stop the local service first.
 cd "$(dirname "$0")"
 export PRODUCTION=0 OCR_ENGINE=auto
 n=8; while [ -e "$HOME/Development/visa-ocr-testdata-results$n" ]; do n=$((n+1)); done

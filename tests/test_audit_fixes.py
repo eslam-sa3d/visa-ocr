@@ -92,7 +92,8 @@ def test_forwarded_for_uses_last_hop(monkeypatch):
 def test_names_match_edge_cases():
     assert not names_match([], [])
     assert not names_match(["ABDULLAH"], ["AB"])
-    assert names_match(["ABDULLAH"], ["ABD"])
+    assert names_match(["ABDULLAH"], ["ABD"], name_field_full=True)   # a real cut: the name field is full
+    assert not names_match(["ABDULLAH"], ["ABD"])                     # fillers left: ABD is another name
 
 
 # 7. entrypoint refuses to start open

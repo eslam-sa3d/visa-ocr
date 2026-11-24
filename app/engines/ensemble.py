@@ -82,10 +82,11 @@ def _agree_except_optional(a: list[str], b: list[str], page_text: list[dict] | N
     if not (pa.valid and pb.valid) or pa.format in ("MRVA", "MRVB") or pa.corrected_fields or pb.corrected_fields:
         return None
     name_a, name_b = (a[2], b[2]) if len(a) == 3 else (a[0], b[0])
-    same_names = _squash([name_a]) == _squash([name_b])
-    if any(getattr(pa, f) != getattr(pb, f) for f in _KEY_FIELDS if not (same_names and f in ("surname", "given_names"))):
+    # Every key field as parsed, names included: one '<' against '<<' moves the split between surname and given names, so
+    # equal letters are not equal names.
+    if any(getattr(pa, f) != getattr(pb, f) for f in _KEY_FIELDS):
         return None
-    if same_names and name_a != name_b:              # keep the name line whose filler counts make a well-formed line
+    if name_a != name_b:              # same parsed names, only trailing filler counts differ: keep the better-formed line
         keep = name_a if name_a.count("<") >= name_b.count("<") else name_b
         a = [keep if ln == name_a else ln for ln in a]
         b = [keep if ln == name_b else ln for ln in b]
@@ -126,6 +127,15 @@ def _repairs(lines: list[str]) -> int:
     return len(p.corrected_fields) + len(p.repaired_fields)
 
 
+def _name_line(lines: list[str]) -> str:
+    return lines[2] if len(lines) == 3 else lines[0]
+
+
+def _names_cleaned(p) -> bool:
+    """Letters were removed from the name line as misread fillers: the name is a guess, not a reading."""
+    return any(str(c).startswith("line") and "removed" in str(c) for c in p.corrected_fields)
+
+
 def _agreed_fields(a: list[str], b: list[str]) -> list[str]:
     """Fields with the same value in two readings that BOTH pass every check digit. Two independent readers giving the same
     value is the evidence for a field no check digit covers, so it is taken field by field: a misread letter in the name does
@@ -140,11 +150,9 @@ def _agreed_fields(a: list[str], b: list[str]) -> list[str]:
                                     ("issuingState", ("issuing_state",)), ("documentType", ("type_code",)),
                                     ("names", ("surname", "given_names")))
            if all(getattr(pa, x) == getattr(pb, x) for x in attrs)]
-    # The name line, compared on its letters and where its fillers are, not on how many fillers there are (see _squash).
-    name_a, name_b = (a[2], b[2]) if len(a) == 3 else (a[0], b[0])
-    if _squash([name_a]) == _squash([name_b]):
-        out += [f for f in ("names", "issuingState", "documentType") if f not in out]
-    if "names" in out and any("filler read as letters removed" in c for c in pa.corrected_fields + pb.corrected_fields):
+    # Names, issuing state and type are agreed only on equal parsed values, never on letters alone (see _squash): a reader that
+    # cannot count fillers cannot confirm where the surname ends.
+    if "names" in out and (_names_cleaned(pa) or _names_cleaned(pb)):
         out.remove("names")          # a name that needed letters removed is not evidence
     return out
 
@@ -233,11 +241,35 @@ class EnsembleEngine:
         if t.mrz_lines and r.mrz_lines and t.mrz_lines != r.mrz_lines and _squash(t.mrz_lines) == _squash(r.mrz_lines):
             # Same letters and digits in the same order; only the filler counts differ. Keep the reading whose counts make a
             # valid MRZ, and treat the two as agreeing.
-            keep = next((x for x in (t, r) if _score(x.mrz_lines)[1]), None)
+            # Of the readings with a valid MRZ, prefer one whose name line has a '<<' separator: the reader that merged it lost
+            # where the surname ends.
+            valid = [x for x in (t, r) if _score(x.mrz_lines)[1]]
+            keep = next((x for x in valid if re.search(r"[A-Z]<<[A-Z]", _name_line(x.mrz_lines))), valid[0] if valid else None)
             if keep is not None:
-                readers["agree"] = "same characters, filler counts differ"
-                return EngineOutput(engine=self.name, mrz_lines=keep.mrz_lines, mrz_confidence=agreement_confidence(),
-                                    fields={**r.fields, "readers": readers, "agreedFields": list(_ALL_FIELDS)})
+                other = r if keep is t else t
+                try:
+                    pk, po = parse_mrz(keep.mrz_lines), parse_mrz(other.mrz_lines)
+                    same = all(getattr(pk, f) == getattr(po, f) for f in ("type_code", "issuing_state", "surname", "given_names"))
+                except MrzError:
+                    pk, same = None, False
+                if same and pk is not None and not _names_cleaned(pk):
+                    readers["agree"] = "same characters, filler counts differ"
+                    return EngineOutput(engine=self.name, mrz_lines=keep.mrz_lines, mrz_confidence=agreement_confidence(),
+                                        fields={**r.fields, "readers": readers, "agreedFields": list(_ALL_FIELDS)})
+                # The letters agree but the filler counts give different names, type or state (one '<' for '<<' moves the split
+                # between surname and given names), or the name needed clean-up: only one reading shows where the fillers are, so
+                # only the fields that parse the same in both are confirmed, and the rest goes to the other evidence or a person.
+                agreed = []
+                if pk is not None:
+                    agreed = [name for name, attrs in (("documentNumber", ("document_number",)), ("nationality", ("nationality",)),
+                                                       ("sex", ("sex",)), ("issuingState", ("issuing_state",)),
+                                                       ("documentType", ("type_code",)), ("names", ("surname", "given_names")))
+                              if all(getattr(pk, x) == getattr(po, x) for x in attrs)]
+                    if _names_cleaned(pk) and "names" in agreed:
+                        agreed.remove("names")
+                readers["agree"] = "same characters, filler counts differ; " + (", ".join(agreed) or "no field") + " confirmed"
+                return EngineOutput(engine=self.name, mrz_lines=keep.mrz_lines, mrz_confidence=None,
+                                    fields={**r.fields, "readers": readers, **({"agreedFields": agreed} if agreed else {})})
         if t.mrz_lines and r.mrz_lines and t.mrz_lines == r.mrz_lines:
             score, perfect = _score(t.mrz_lines)
             conf = agreement_confidence() if perfect else None

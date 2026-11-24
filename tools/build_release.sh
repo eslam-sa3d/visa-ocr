@@ -64,4 +64,11 @@ rm -rf release.previous; [ -d release ] && mv release release.previous; mv "$OUT
 echo
 cat release/BUILD_INFO.txt
 echo
+SUMS_SHA="$( (command -v sha256sum >/dev/null 2>&1 && sha256sum release/SHA256SUMS.txt || shasum -a 256 release/SHA256SUMS.txt) | cut -d' ' -f1)"
+# The checksum file travels with the release, so it proves nothing about the transfer on its own. Its own SHA-256 and the
+# image id are recorded here, outside the folder: send them to the server team by a different route (e-mail, ticket, phone)
+# from the release folder itself, and they compare before loading (DEPLOYMENT.txt step 1).
+{ echo "$(date -u +%Y-%m-%dT%H:%MZ)  visa-ocr $TAG  SHA256SUMS.txt=$SUMS_SHA  image=$(docker image inspect "$IMAGE" --format '{{.Id}}')"; } >> "$HOME/visa-ocr-release-records.txt"
+echo "SHA-256 of release/SHA256SUMS.txt: $SUMS_SHA"
+echo "Send that value and the image id to the server team by a different route from the release folder (kept in ~/visa-ocr-release-records.txt)."
 echo "DONE: release/ is ready to hand over. The folder from before is in release.previous/ (delete it when you are happy)."

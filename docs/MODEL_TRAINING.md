@@ -78,9 +78,15 @@ person approves it on the server:
 
 ```
 python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --list            # least confident readings first
-python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --show JOB_ID
-python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --approve JOB_ID --approver "Name"
+python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --show JOB_ID --crops-dir ~/crops-JOB_ID
+python tools/approve_corrections.py --store-dir "$TRAINING_STORE_DIR" --approve JOB_ID --correction DIGEST --approver "Name"
 ```
+
+`--show` prints each correction with a digest in square brackets, and writes the image crop each line's box covers to a
+private folder: look at the crops, not only at the text and the box numbers. `--approve` decides only the correction whose
+digest you give, and only if it is unchanged since you looked; a correction posted afterwards stays pending. The digests of
+the crops you were shown are recorded with the approval, and a line whose crop differs is never used. Stored text is shown
+with every control or formatting character as a visible escape. Delete the crops folder when you are done.
 
 The submitter cannot approve their own correction. Whatever is approved, the dataset builder still drops a correction whose
 MRZ lines fail their own check digits, malformed records, lines in another language than the one being trained, duplicate

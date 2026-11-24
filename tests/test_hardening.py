@@ -87,7 +87,8 @@ def test_applicant_data_mismatches_each_field():
 
 def test_name_matching_rules():
     assert names_match(["ANNA", "MARIA", "ERIKSSON"], ["ERIKSSON", "ANNA", "MARIA"])        # order does not matter
-    assert names_match(["OMAR", "SOBHY", "IBRAHIM"], ["OMAR", "SOBHY", "IBRA"])             # name cut to fit the MRZ
+    assert names_match(["OMAR", "SOBHY", "IBRAHIM"], ["OMAR", "SOBHY", "IBRA"], name_field_full=True)   # cut to fit the MRZ
+    assert not names_match(["OMAR", "SOBHY", "IBRAHIM"], ["OMAR", "SOBHY", "IBRA"])         # fillers left: not a cut
     assert not names_match(["ANNA", "MARIA"], ["ANNA", "MARTA"])
     assert not names_match(["ANNA", "MARIA", "EXTRA"], ["ANNA", "MARIA"])                   # a name is missing in the document
 

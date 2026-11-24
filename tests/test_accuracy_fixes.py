@@ -85,7 +85,9 @@ def test_k_for_filler_in_optional_data_is_removed():
     lines = td3(opt="SJ9LM")
     bad = [lines[0], lines[1][:34] + "K" + lines[1][35:]]
     r = parse_mrz(bad, TODAY)
-    assert r.valid and r.optional_data == "SJ9LM"
+    # K and '<' give the same check digit, so the tidy is likely but unproven: kept, and sent to a person
+    assert r.optional_data == "SJ9LM" and not r.valid
+    assert "mrz_field_repaired" in {f.code for f in validate(r, TODAY)}
 
 
 def test_passport_read_as_visa_is_flagged():

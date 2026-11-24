@@ -38,6 +38,16 @@ def _no_fast_first(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_audit_state():
+    """Repeated security events are written once per window; each test starts with no window open and no failed write."""
+    from app import audit
+    audit._seen.clear()
+    audit.write_failed = False
+    yield
+    audit.write_failed = False
+
+
+@pytest.fixture(autouse=True)
 def _one_reader_in_process(monkeypatch):
     """Tests stand in their own readers and read in the test process. The service would otherwise size itself to this
     machine and start reader processes of its own, which know nothing of a stand-in. Reader processes have their own test."""

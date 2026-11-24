@@ -11,6 +11,7 @@ Checks that need a certain server set-up are reported as SKIP when that set-up i
 """
 from __future__ import annotations
 
+import os
 import argparse
 import io
 import json
@@ -497,8 +498,9 @@ def security_checks(api: Api, a) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:8000")
-    ap.add_argument("--key")
-    ap.add_argument("--key2", help="a second valid key, for the isolation test")
+    ap.add_argument("--key", default=os.environ.get("VISA_OCR_API_KEY") or None, help="API key; better set VISA_OCR_API_KEY so the key is not on the command line, where other accounts and the shell history can see it")
+    ap.add_argument("--key2", default=os.environ.get("VISA_OCR_API_KEY2") or None,
+                    help="a second valid key, for the isolation test (or VISA_OCR_API_KEY2)")
     ap.add_argument("--training", action="store_true")
     ap.add_argument("--store-dir")
     ap.add_argument("--insecure", action="store_true")

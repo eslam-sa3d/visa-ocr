@@ -5,7 +5,8 @@
     python tools/make_checksums.py --check wheelhouse    # on the offline server: every file must match, none may be extra
 
 The file has the format of `sha256sum`, so `sha256sum -c SHA256SUMS` checks it too. Carry the SHA256SUMS file by a
-different route from the folder (or sign it) if the transfer itself is not trusted.
+different route from the folder (or sign it) if the transfer itself is not trusted. With MANIFEST_HMAC_KEY (or
+MANIFEST_HMAC_KEY_FILE) set, SHA256SUMS.sig is written too: the service then uses models/tessdata only with a valid signature.
 """
 from __future__ import annotations
 
@@ -26,12 +27,17 @@ def digest(path: Path) -> str:
 
 
 def files(folder: Path) -> list[Path]:
-    return sorted(p for p in folder.rglob("*") if p.is_file() and p.name != NAME)
+    return sorted(p for p in folder.rglob("*") if p.is_file() and p.name not in (NAME, NAME + ".sig"))
 
 
 def write(folder: Path) -> int:
     rows = [f"{digest(p)}  {p.relative_to(folder).as_posix()}" for p in files(folder)]
     (folder / NAME).write_text("\n".join(rows) + "\n", encoding="utf-8")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from app.model_registry import sign_bytes  # noqa: WPS433
+    sig = sign_bytes((folder / NAME).read_bytes())          # with MANIFEST_HMAC_KEY set: models/tessdata needs this
+    if sig:
+        (folder / (NAME + ".sig")).write_text(sig + "\n", encoding="utf-8")
     return len(rows)
 
 

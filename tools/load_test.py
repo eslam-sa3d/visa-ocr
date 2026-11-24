@@ -3,6 +3,7 @@
   python tools/load_test.py --url http://127.0.0.1:8000 --image scenarios/images/<file> --expect-surname ERIKSSON -n 40 -c 8
 Add --api-key KEY when the server has API_KEYS set.
 """
+import os
 import argparse
 import concurrent.futures as cf
 import statistics
@@ -37,7 +38,7 @@ def main():
     p.add_argument("-n", type=int, default=40)
     p.add_argument("-c", type=int, default=8)
     p.add_argument("--timeout", type=int, default=180)
-    p.add_argument("--api-key")
+    p.add_argument("--api-key", default=os.environ.get("VISA_OCR_API_KEY") or None, help="API key; better set VISA_OCR_API_KEY so the key is not on the command line, where other accounts and the shell history can see it")
     a = p.parse_args()
     data = open(a.image, "rb").read()
     with cf.ThreadPoolExecutor(a.c) as ex:

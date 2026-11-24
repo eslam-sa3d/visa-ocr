@@ -15,6 +15,7 @@ from app.engines.paddle_ocr import PaddleOcrEngine
 from app.model_registry import ModelInfo, Registry, dir_sha256
 from app.textutil import normalize_arabic, script_of, to_ascii_digits
 from app.training_store import TrainingStore
+from tests.approval import approve
 
 ROOT = Path(__file__).resolve().parent.parent
 MRZ = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
@@ -265,9 +266,12 @@ def test_synth_prepare_and_split_pipeline(tmp_path):
         job = store / "jobs" / f"job{n}"
         (job / "images").mkdir(parents=True)
         Image.new("RGB", (300, 100), "white").save(job / "images" / "0.png")
-        (job / "correction.json").write_text(json.dumps({"status": "approved", "approvedBy": "second person", "reviewer": "first person", "lines": [
+        rec = {"status": "approved", "approvedBy": "second person", "reviewer": "first person", "lines": [
             {"image": 0, "box": [5, 5, 250, 60], "text": f"محمد {n}", "lang": "ar"},
-            {"image": 0, "box": [5, 5, 3, 6], "text": "too small", "lang": "en"}]}), encoding="utf-8")
+            {"image": 0, "box": [5, 5, 3, 6], "text": "too small", "lang": "en"}]}
+        from tests.approval import crops
+        rec["approvedCrops"] = crops(job, rec)
+        (job / "correction.json").write_text(json.dumps(rec), encoding="utf-8")
 
     dictionary = tmp_path / "dict.txt"
     dictionary.write_text("\n".join("محد0123456789"), encoding="utf-8")
@@ -356,7 +360,7 @@ def test_ui_flow_consent_then_correction_becomes_a_training_crop(tmp_path, monke
     out = tmp_path / "ds"
     (out / "images").mkdir(parents=True)
     assert prepare_dataset.from_store(tmp_path / "store", out) == []          # pending: not training data yet
-    main.training.decide(r.json()["jobId"], "a second person")
+    approve(main.training, r.json()["jobId"], "a second person")
     samples = prepare_dataset.from_store(tmp_path / "store", out, lang="en")
     assert [s["text"] for s in samples] == lines
     from PIL import Image

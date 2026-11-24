@@ -265,10 +265,16 @@ Line crops and label files made for a training run are deleted when the run ends
 | `PRODUCTION` | off | Refuses to start with authentication off, the test page or API pages on, models without a checksum allowed, unencrypted storage, or a self-signed certificate. |
 | `API_KEYS_FILE` | unset | JSON list of keys with a role (`uploader`, `reviewer`, `admin`) and an optional expiry date. Keys in `API_KEYS` keep the role `full`. |
 | `UI_ENABLED` | on (off in production) | The built-in test page at `/ui`. |
-| `AUDIT_LOG_FILE` | unset | File that receives the security event log, one JSON line per event, no personal data. |
+| `AUDIT_LOG_FILE` | unset | File that receives the security event log, one JSON line per event, no personal data. Without it events go to stderr. When it cannot be written, `/readyz` answers 503 and the events go to the service log. Rotate it on the host. |
 | `UPLOAD_SCAN_COMMAND` | unset | Malware scanner run on every upload; the file path is added to the command. Exit 0 clean, 1 infected, anything else refuses the upload. |
 | `UPLOAD_SCAN_SECONDS` | 20 | Time limit for one scan. |
 | `DATA_CIPHER` | Fernet | `aes256gcm` encrypts new data with AES-256-GCM. |
+| `DATA_ALLOW_PLAINTEXT_READ` | off | With a data key, stored data that is not encrypted is refused. `1` accepts it while data written before the key was set still exists. Refused in production. |
+| `DATA_ALLOW_UNBOUND_READ` | off | Stored job values are sealed for their own job, column and owner. `1` also reads values written by 1.0.0 and earlier: set it for one `JOB_TTL_MINUTES` after the upgrade, then remove it. |
+| `CORRECTIONS_PER_MIN` | 30 | Corrections one client may post per minute; always on, also with `RATE_LIMIT_PER_MIN=0`. |
+| `MAX_CORRECTIONS_PER_JOB` | 10 | Corrections kept for one job. |
+| `TRAINING_MIN_FREE_BYTES` | 2 GB | Training writes stop while the store's volume has less free space than this; reading goes on. |
+| `MANIFEST_STATE_FILE` | unset | With `MANIFEST_HMAC_KEY`: where the highest manifest serial accepted is kept, so an older signed manifest put back is refused after a restart too. Put it on the data volume. |
 | `TLS_CIPHERS` | forward-secret AEAD suites | Cipher list for the built-in HTTPS; TLS 1.0 and 1.1 are never accepted. |
 
 New answers a caller can receive: `403 forbidden` (the key's role does not allow the action), `401 key_expired`,

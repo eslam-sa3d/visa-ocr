@@ -33,8 +33,9 @@ def _tokens(*parts: str | None) -> list[str]:
     return [t for t in re.sub(r"[^A-Z ]", " ", " ".join(p or "" for p in parts).upper()).split() if t]
 
 
-def names_match(applicant_tokens: list[str], doc_tokens: list[str]) -> bool:
-    """Same words in any order. A document name cut off to fit the MRZ (a prefix of an applicant word) still matches."""
+def names_match(applicant_tokens: list[str], doc_tokens: list[str], name_field_full: bool = False) -> bool:
+    """Same words in any order. A document word that is only the start of an applicant word matches only when the MRZ name
+    field is full, because only then was the name cut to fit. With fillers left at the end, a short word is a different name."""
     if not applicant_tokens or not doc_tokens:        # nothing comparable (e.g. non-Latin names) is not a match
         return False
     remaining = list(applicant_tokens)
@@ -42,7 +43,7 @@ def names_match(applicant_tokens: list[str], doc_tokens: list[str]) -> bool:
         if t in remaining:
             remaining.remove(t)
             continue
-        cut = next((r for r in remaining if r.startswith(t) and len(t) >= 3), None)
+        cut = next((r for r in remaining if name_field_full and r.startswith(t) and len(t) >= 3), None)
         if cut is None:
             return False
         remaining.remove(cut)
@@ -62,7 +63,7 @@ def _clip(s: str, n: int = 40) -> str:
     return s if len(s) <= n else s[:n] + "..."
 
 
-def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict[str, bool]]:
+def compare_applicant(doc: dict, applicant: Applicant, name_field_full: bool = False) -> tuple[list[Flag], dict[str, bool]]:
     """Compare form data with the document. Returns (flags, which unprotected groups the form confirms)."""
     flags: list[Flag] = []
     verified = {"names": False, "nationality": False}
@@ -97,8 +98,10 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
         d_tokens = _tokens(doc.get("surname"), doc.get("givenNames")) or _tokens(doc.get("nameEn"))
         if applicant.surname and not applicant.given_names:
             d_tokens = _tokens(doc.get("surname")) if doc.get("surname") else d_tokens
-        if names_match(a_tokens, d_tokens):
-            verified["names"] = True
+        if names_match(a_tokens, d_tokens, name_field_full):
+            # A surname on its own says nothing about the given names: the form confirms the names only when it covers them,
+            # or the document has none.
+            verified["names"] = bool(applicant.given_names) or not _tokens(doc.get("givenNames"))
         else:
             flags.append(Flag("applicant_name_mismatch", "error",
                               f"Form name '{_clip(' '.join(a_tokens), 120)}' does not match the document name "
@@ -106,13 +109,22 @@ def compare_applicant(doc: dict, applicant: Applicant) -> tuple[list[Flag], dict
     return flags, verified
 
 
-def _page_values(text_lines: list[dict]) -> dict:
+def _looks_like_mrz(text: str, mrz_lines: list[str]) -> bool:
+    """A line of the machine-readable zone itself, also when the reader dropped or changed its fillers: it is not a second copy."""
+    compact = re.sub(r"\s+", "", text)
+    if "<" in compact or re.fullmatch(r"[A-Z0-9]{28,}", compact):
+        return True
+    plain = [m.replace("<", "") for m in mrz_lines]
+    return len(compact) >= 10 and any(compact in m or compact.replace("<", "") in m for m in plain)
+
+
+def _page_values(text_lines: list[dict], mrz_lines: list[str] | None = None) -> dict:
     """Stand-alone values printed on the page: upper-case tokens, and the sex letters found on their own or after a slash."""
     tokens: set[str] = set()
     sexes: set[str] = set()
     for ln in text_lines:
         text = str(ln.get("text", "")).upper()
-        if "<" in text:
+        if _looks_like_mrz(text, mrz_lines or []):
             continue
         tokens.update(t for t in re.split(r"[^A-Z0-9]+", text) if t)
         m = re.fullmatch(r"(?:.*[/\s])?([MF])", text.strip())
@@ -159,13 +171,18 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     doc = result["document"]
     flags: list[Flag] = []
 
-    a_flags, verified = compare_applicant(doc, applicant)
+    # A name is cut only when it does not fit: the MRZ name line (line 1; line 3 on a three-line card) then has no filler at its end.
+    # The line as read is not enough: the parser turns stray letters in the filler run back into fillers, and the name is then
+    # short, so any clean-up of the name line means the field was not full.
+    name_line = (mrz_lines[2] if len(mrz_lines) == 3 else mrz_lines[0]) if mrz_lines else ""
+    name_cleaned = any(str(c).startswith("line") and "removed" in str(c) for c in doc.get("correctedFields") or [])
+    name_field_full = bool(name_line) and not name_line.endswith("<") and not name_cleaned
+
+    a_flags, verified = compare_applicant(doc, applicant, name_field_full)
     flags += a_flags
 
-    # A name is cut only when it does not fit: the MRZ name line (line 1; line 3 on a three-line card) then has no filler at its end.
-    name_line = (mrz_lines[2] if len(mrz_lines) == 3 else mrz_lines[0]) if mrz_lines else ""
     v_status, printed = visual_name_status(doc.get("surname", ""), doc.get("givenNames", ""), text_lines or [],
-                                           name_field_full=bool(name_line) and not name_line.endswith("<"))
+                                           name_field_full=name_field_full)
     if v_status == "mismatch":
         # When two independent readers read the same MRZ name, a near miss on the printed page is more likely a misread of the
         # page (small or decorative print) than of the MRZ: it is reported, and does not force a review.
@@ -179,7 +196,7 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
 
     # Evidence for a field no check digit covers, strongest first.
     readers = set(agreed or [])     # two independent readers gave the same value, in readings that both pass every check digit
-    page = _page_values(text_lines or [])
+    page = _page_values(text_lines or [], mrz_lines)
     on_page: set[str] = set()       # the printed part of the page holds the same value: a second copy in another typeface
     if v_status == "match":
         on_page.add("names")
@@ -197,7 +214,11 @@ def apply_mrz_policy(result: dict, mrz_confidence: float | None, text_lines: lis
     # Passports and ID cards carry a whole-line check digit that visas do not have: when it passes, the line is not a visa line.
     checks = doc.get("checks") or {}
     # Taken only together with other evidence, so a single unconfirmed reading is never accepted on this alone.
-    if doc.get("format") in ("TD1", "TD2", "TD3") and checks and all(checks.values()) and (readers or on_page):
+    # The format fixes the type only for a letter the format allows: a misread letter (F on a passport line) is not confirmed.
+    from .mrz import _TYPE_LETTERS
+    type_letter = (doc.get("typeCode") or "")[:1]
+    if (doc.get("format") in ("TD1", "TD2", "TD3") and checks and all(checks.values()) and (readers or on_page)
+            and type_letter and type_letter in _TYPE_LETTERS.get(doc.get("format"), "")):
         by_format.add("documentType")
 
     def decide(name: str, by_form: bool) -> bool:

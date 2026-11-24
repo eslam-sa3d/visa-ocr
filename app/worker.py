@@ -40,9 +40,16 @@ def process_job(store, job_id: str, images: list[bytes], hint: str | None, appli
     """Run one job and store the outcome. With a claim token (PostgreSQL queue) the claim is renewed while the job runs and
     the outcome is written only if this run still holds the claim."""
     if token is None:
+        current = store.get(job_id)
+        if current is None or current.status != "queued":
+            # expired, or already failed as timed out while it waited: reading it now would spend a reader on a job the
+            # caller has been told is over, and could turn "failed" into "done" afterwards
+            return
         store.update(job_id, status="processing")
         status, payload = _run(job_id, images, hint, applicant, engine_getter)
-        store.update(job_id, status=status, **({"result": payload} if status == "done" else {"error": payload}))
+        current = store.get(job_id)
+        if current is not None and current.status == "processing":       # not failed by the sweep meanwhile
+            store.update(job_id, status=status, **({"result": payload} if status == "done" else {"error": payload}))
         return
     done = threading.Event()
 

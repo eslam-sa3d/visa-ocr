@@ -144,13 +144,19 @@ def main() -> None:
             target = next((m for m in models if m.id == args.set_metrics), None)
             if target is None or not metrics:
                 raise SystemExit("--set-metrics needs an existing model id and --metrics file")
+            old_cer = (target.metrics or {}).get("cer")
             target.metrics = metrics
             reg.save(models)
+        audit.event("model_metrics_set", model=target.id, old_cer=old_cer if isinstance(old_cer, (int, float)) else None,
+                    new_cer=metrics.get("cer") if isinstance(metrics.get("cer"), (int, float)) else None)
         print(f"recorded metrics for {target.id}")
         return
     for need in ("id", "task", "lang", "version", "path"):
         if not getattr(args, need):
             ap.error(f"--{need} is required")
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", args.id) or ".." in args.id:
+        ap.error("--id may hold letters, digits, '.', '_' and '-' only")
     info = ModelInfo(id=args.id, task=args.task, lang=args.lang, version=args.version, path=args.path,
                      arch=args.arch, source=args.note or "fine-tuned", metrics=metrics)
     digest = register(reg, info, args.activate, args.force, args.replace)

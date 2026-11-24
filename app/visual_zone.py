@@ -203,12 +203,29 @@ def _is_label(line: dict) -> bool:
     return n in NOISE or _classify(line["text"])[0] is not None
 
 
-def _find_value(field: str, lines: list[dict]) -> tuple[str, dict] | None:
+def _label_between(lines: list[dict], label: dict, cand: dict, a: tuple, b: tuple) -> bool:
+    """Another label lies on the row between this label (box a) and the candidate value (box b): the value is that label's."""
+    lo, hi = (b[2], a[0]) if b[2] <= a[0] + 1 else (a[2], b[0])
+    cy = (a[1] + a[3]) / 2
+    for x in lines:
+        if x is label or x is cand or not _is_label(x):
+            continue
+        xb = _bbox(x)
+        if xb and xb[1] <= cy <= xb[3] and xb[0] >= lo - 1 and xb[2] <= hi + 1:
+            return True
+    return False
+
+
+def _find_value(field: str, lines: list[dict], how: list[str] | None = None) -> tuple[str, dict] | None:
+    """The value printed for a field's label: in the label's own box, beside it on its row, or (with no boxes) on the next
+    line. `how`, when given, gets "box", "row" or "next" for the way the value was bound to the label."""
+    how = how if how is not None else []
     for idx, ln in enumerate(lines):
         f, rest = _classify(ln["text"])
         if f != field:
             continue
         if rest:                                   # "label: value" in one box
+            how.append("box")
             return rest, ln
         bb = _bbox(ln)
         if bb:                                     # value on the same row; Arabic cards put it LEFT of the label
@@ -217,6 +234,8 @@ def _find_value(field: str, lines: list[dict]) -> tuple[str, dict] | None:
             for o in lines:
                 ob = _bbox(o)
                 if o is ln or ob is None or _is_label(o) or not o["text"].strip():
+                    continue
+                if _label_between(lines, ln, o, bb, ob):
                     continue
                 if abs((ob[1] + ob[3]) / 2 - cy) <= 0.6 * max(h, ob[3] - ob[1]):
                     gap_left = bb[0] - ob[2]
@@ -227,9 +246,11 @@ def _find_value(field: str, lines: list[dict]) -> tuple[str, dict] | None:
                     elif gap_right >= slack:
                         cands.append((1000 + gap_right, o))
             if cands:
+                how.append("row")
                 return min(cands, key=lambda c: c[0])[1]["text"].strip(), min(cands, key=lambda c: c[0])[1]
         for nxt in lines[idx + 1: idx + 3]:        # no geometry: value on the next line
             if not _is_label(nxt) and nxt["text"].strip():
+                how.append("next")
                 return nxt["text"].strip(), nxt
     return None
 
@@ -362,12 +383,18 @@ class _Card:
 def _saudi_number(c: _Card):
     """The 10-digit Saudi number: by its label first, otherwise any such number not on another field's line. Returns
     (number or None, the labelled value found, was a digit rebuilt, was it taken without a label)."""
-    found = _find_value("idNumber", c.lines)
+    how: list[str] = []
+    found = _find_value("idNumber", c.lines, how)
     if found:
+        # Bound to the ID label only in the label's own box or beside it on its row. A value found on the next line, or one
+        # that another field's label also takes as its value (the employer's ID beside its own label), is not proven to be
+        # the holder's number: it is used, and flagged so a person checks it whatever the confidence threshold.
+        shared = any(f != "idNumber" and (v := _find_value(f, c.lines)) is not None and v[1] is found[1] for f in LABELS)
+        indirect = how[-1:] == ["next"] or shared
         m = _ID10.search(re.sub(r"[\s-]", "", to_ascii_digits(found[0])))
         if m:
             c.scores["idNumber"] = found[1].get("score", 1.0)
-            return m[1], found, False, False
+            return m[1], found, False, indirect
         fixed = _repair_one_unreadable_digit(found[0])
         if fixed:
             c.scores["idNumber"] = min(found[1].get("score", 1.0), 0.5)

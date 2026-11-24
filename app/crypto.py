@@ -24,6 +24,9 @@ from pathlib import Path
 
 PREFIX = b"VOENC1:"          # Fernet
 PREFIX_GCM = b"VOENC2:"      # AES-256-GCM: base64(12-byte nonce + ciphertext + tag)
+PREFIX_BOUND = b"VOENC4:"    # Fernet, with the context it belongs to sealed inside: 2-byte length + context + data
+PREFIX_GCM_BOUND = b"VOENC3:"  # AES-256-GCM with the context as associated data
+_ALL = (PREFIX, PREFIX_GCM, PREFIX_BOUND, PREFIX_GCM_BOUND)
 _cache: tuple[str, float, object, list] | None = None
 
 
@@ -68,8 +71,21 @@ def enabled() -> bool:
     return _fernet() is not None
 
 
-def seal(data: bytes) -> bytes:
-    """Encrypted form of `data` when a key is configured, otherwise `data` unchanged."""
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip() == "1"
+
+
+def plaintext_read_allowed() -> bool:
+    """With a key configured, data that is not encrypted is refused: anyone who can write to the database or the training
+    store could otherwise put any result there. DATA_ALLOW_PLAINTEXT_READ=1 lets data written before the key was set be read
+    during a migration; the production start-up gate refuses it."""
+    return _fernet() is None or _flag("DATA_ALLOW_PLAINTEXT_READ")
+
+
+def seal(data: bytes, context: bytes | None = None) -> bytes:
+    """Encrypted form of `data` when a key is configured, otherwise `data` unchanged. `context` names where the value belongs
+    (job id, column, owner): it is sealed with the value, so the value opens only in that place. A value copied to another row,
+    or a row whose owner was changed, is refused."""
     cipher = _fernet()
     if cipher is None:
         return data
@@ -77,55 +93,82 @@ def seal(data: bytes) -> bytes:
         import base64  # noqa: WPS433
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: WPS433
         nonce = os.urandom(12)
-        return PREFIX_GCM + base64.urlsafe_b64encode(nonce + AESGCM(_cache[3][0]).encrypt(nonce, data, None))
-    return PREFIX + cipher.encrypt(data)
+        prefix = PREFIX_GCM if context is None else PREFIX_GCM_BOUND
+        return prefix + base64.urlsafe_b64encode(nonce + AESGCM(_cache[3][0]).encrypt(nonce, data, context))
+    if context is None:
+        return PREFIX + cipher.encrypt(data)
+    return PREFIX_BOUND + cipher.encrypt(len(context).to_bytes(2, "big") + context + data)
 
 
-def unseal(data: bytes) -> bytes:
-    """The plain bytes. Data that was never encrypted is returned as it is."""
+def unseal(data: bytes, context: bytes | None = None) -> bytes:
+    """The plain bytes. Data that was never encrypted is returned as it is only when no key is configured (or during a
+    migration, see plaintext_read_allowed). With `context`, the value must have been sealed for that same context."""
+    import hmac  # noqa: WPS433
     data = bytes(data)
-    if not data.startswith((PREFIX, PREFIX_GCM)):
+    if not data.startswith(_ALL):
+        if not plaintext_read_allowed():
+            raise DataKeyError("stored data is not encrypted although a data key is configured")
         return data
     cipher = _fernet()
     if cipher is None:
         raise DataKeyError("this data is encrypted and no DATA_KEY_FILE is configured")
-    if data.startswith(PREFIX_GCM):
+    bound = data.startswith((PREFIX_BOUND, PREFIX_GCM_BOUND))
+    if context is not None and not bound and not _flag("DATA_ALLOW_UNBOUND_READ"):
+        # written before values were bound to their row; readable only while the operator says so (one JOB_TTL_MINUTES)
+        raise DataKeyError("stored data is not bound to its job; set DATA_ALLOW_UNBOUND_READ=1 while older jobs expire")
+    if bound and context is None:
+        raise DataKeyError("this data is bound to a context that was not given")
+    if data.startswith((PREFIX_GCM, PREFIX_GCM_BOUND)):
         import base64  # noqa: WPS433
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: WPS433
         try:
             blob = base64.urlsafe_b64decode(data[len(PREFIX_GCM):])
         except ValueError as exc:
             raise DataKeyError("encrypted data is damaged") from exc
+        aad = context if bound else None
         for key in _cache[3]:                      # newest key first; an older one still opens what it wrote
             try:
-                return AESGCM(key).decrypt(blob[:12], blob[12:], None)
-            except Exception:  # noqa: BLE001 - wrong key or changed data
+                return AESGCM(key).decrypt(blob[:12], blob[12:], aad)
+            except Exception:  # noqa: BLE001 - wrong key, changed data or another context
                 continue
         raise DataKeyError("encrypted data could not be opened with the configured keys")
     try:
-        return cipher.decrypt(data[len(PREFIX):])
+        plain = cipher.decrypt(data[len(PREFIX):])
     except Exception as exc:  # noqa: BLE001 - wrong key or changed data; the library's message adds nothing
         raise DataKeyError("encrypted data could not be opened with the configured keys") from exc
+    if not bound:
+        return plain
+    n = int.from_bytes(plain[:2], "big")
+    if not hmac.compare_digest(plain[2:2 + n], context or b""):
+        raise DataKeyError("encrypted data belongs to another job or owner")
+    return plain[2 + n:]
 
 
-def seal_text(text: str) -> str:
-    return seal(text.encode("utf-8")).decode("ascii") if enabled() else text
+def seal_text(text: str, context: bytes | None = None) -> str:
+    return seal(text.encode("utf-8"), context).decode("ascii") if enabled() else text
 
 
-def unseal_text(text: str) -> str:
-    return unseal(text.encode("utf-8")).decode("utf-8") if text.startswith((PREFIX.decode(), PREFIX_GCM.decode())) else text
+def unseal_text(text: str, context: bytes | None = None) -> str:
+    return unseal(text.encode("utf-8"), context).decode("utf-8")
 
 
-def seal_json(value):
+def seal_json(value, context: bytes | None = None):
     """For a JSON column: the value itself, or {"enc": "<token>"} when a key is configured."""
     import json
     if value is None or not enabled():
         return value
-    return {"enc": seal(json.dumps(value, ensure_ascii=False).encode("utf-8")).decode("ascii")}
+    return {"enc": seal(json.dumps(value, ensure_ascii=False).encode("utf-8"), context).decode("ascii")}
 
 
-def unseal_json(value):
+def unseal_json(value, context: bytes | None = None):
     import json
     if isinstance(value, dict) and set(value) == {"enc"} and isinstance(value["enc"], str):
-        return json.loads(unseal(value["enc"].encode("ascii")).decode("utf-8"))
+        return json.loads(unseal(value["enc"].encode("ascii"), context).decode("utf-8"))
+    if value is not None and not plaintext_read_allowed():
+        raise DataKeyError("stored data is not encrypted although a data key is configured")
     return value
+
+
+def job_context(job_id: str, column: str, owner: str) -> bytes:
+    """Where a job value belongs: it opens only in this job's row, in this column, for this owner."""
+    return f"{job_id}|{column}|{owner}".encode("utf-8")

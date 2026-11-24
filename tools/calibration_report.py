@@ -8,7 +8,8 @@ checked had to be changed. Grouped by confidence, that is a reliability table:
 
 Read it like this: in the row for 0.95-1.00, "wrong" should be close to zero. If readings the service would have accepted
 without review (confidence at or above the threshold, needsReview false) were corrected, the threshold is too low or the
-confidence is not telling the truth. Only documents that reached a reviewer are in the store, so the table says nothing
+confidence is not telling the truth. Only corrections a second person approved are counted. Only documents that reached a
+reviewer are in the store, so the table says nothing
 about documents nobody looked at: sample some accepted ones for review as well.
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app.training_store import load_corrections  # noqa: E402
+from app.training_store import approved_correction  # noqa: E402
 
 BUCKETS = ((0.0, 0.5), (0.5, 0.8), (0.8, 0.9), (0.9, 0.95), (0.95, 1.0001))
 
@@ -29,10 +30,12 @@ def report(store_dir: Path, threshold: float) -> dict:
     rows["no confidence"] = {"documents": 0, "wrong": 0}
     accepted = {"documents": 0, "wrong": 0}
     for job in sorted((store_dir / "jobs").glob("*")):
-        found = [r for _, r in load_corrections(job) if r.get("status") != "rejected" and isinstance(r.get("ocr"), dict)]
-        if not found:
+        # Only a correction a second person approved is evidence: a pending one is one reviewer key's word, and could say
+        # that an accepted reading was right when nobody else has looked.
+        rec = approved_correction(job)
+        if rec is None or not isinstance(rec.get("ocr"), dict):
             continue
-        ocr = found[-1]["ocr"]
+        ocr = rec["ocr"]
         if not ocr.get("fieldsChecked"):
             continue                                 # the reviewer confirmed no fields: nothing to learn from
         wrong = bool(ocr.get("fieldsChanged"))

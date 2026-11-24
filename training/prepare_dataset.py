@@ -83,6 +83,34 @@ def _pixel_hash(im) -> str:
     return hashlib.sha256(repr(rgb.size).encode() + rgb.tobytes()).hexdigest()
 
 
+def job_images(job_dir: Path) -> dict[int, Path]:
+    return {int(p.stem): p for p in (job_dir / "images").glob("*") if p.stem.isdigit()}
+
+
+def cut_line(job_dir: Path, line: dict, images: dict[int, Path] | None = None):
+    """The crop a correction line points at, as (image, None), or (None, reason). The one place crops are cut, so the approver
+    (tools/approve_corrections.py --show) sees exactly the pixels that become training data."""
+    images = images if images is not None else job_images(job_dir)
+    src = images.get(line.get("image"))
+    if src is None:
+        return None, "noImage"
+    try:
+        with Image.open(io.BytesIO(crypto.unseal(src.read_bytes()))) as raw:      # stored encrypted when a key is set
+            im = ImageOps.exif_transpose(raw)          # boxes are in the upright image, as the readers saw it
+            x1, y1, x2, y2 = line["box"]
+            x1, y1 = max(0, min(x1, x2)), max(0, min(y1, y2))
+            x2, y2 = min(im.width, max(x1, x2)), min(im.height, max(y1, y2))
+            if x2 - x1 < MIN_SIDE or y2 - y1 < MIN_SIDE:
+                return None, "boxTooSmall"
+            return im.convert("RGB").crop((x1, y1, x2, y2)), None
+    except (OSError, ValueError, crypto.DataKeyError):
+        return None, "unreadableImage"
+
+
+def crop_digest(crop) -> str:
+    return _pixel_hash(crop)
+
+
 def from_store(store_dir: Path, out: Path, lang: str | None = None, skipped: Counter | None = None,
                exclude: set[str] | None = None) -> list[dict]:
     """Cut line crops from reviewer corrections saved by POST /v1/jobs/{id}/corrections. Only approved corrections count."""
@@ -108,29 +136,24 @@ def from_store(store_dir: Path, out: Path, lang: str | None = None, skipped: Cou
         if len(mrz) in (2, 3) and not check_score(mrz)[1]:
             skipped["mrzLabelFailsCheckDigits"] += 1
             continue
-        images = {int(p.stem): p for p in (job / "images").glob("*") if p.stem.isdigit()}
-        for n, line in enumerate(lines):
+        images = job_images(job)
+        # The approver saw each crop and approved its pixel digest. A line whose crop was not shown, or whose pixels differ
+        # from what was approved, is not used: the text alone says nothing about what the box covers.
+        approved = data.get("approvedCrops") if isinstance(data.get("approvedCrops"), list) else []
+        for n, line in enumerate(raw_lines):
+            if line not in lines:
+                continue
             if lang and line.get("lang") != lang:
                 skipped["otherLanguage"] += 1
                 continue
-            src = images.get(line["image"])
-            if src is None:
-                skipped["noImage"] += 1
-                continue
-            try:
-                with Image.open(io.BytesIO(crypto.unseal(src.read_bytes()))) as raw:      # stored encrypted when a key is set
-                    im = ImageOps.exif_transpose(raw)          # boxes are in the upright image, as the readers saw it
-                    x1, y1, x2, y2 = line["box"]
-                    x1, y1 = max(0, min(x1, x2)), max(0, min(y1, y2))
-                    x2, y2 = min(im.width, max(x1, x2)), min(im.height, max(y1, y2))
-                    if x2 - x1 < MIN_SIDE or y2 - y1 < MIN_SIDE:
-                        skipped["boxTooSmall"] += 1
-                        continue
-                    crop = im.convert("RGB").crop((x1, y1, x2, y2))
-            except (OSError, ValueError, crypto.DataKeyError):
-                skipped["unreadableImage"] += 1
+            crop, why = cut_line(job, line, images)
+            if crop is None:
+                skipped[why] += 1
                 continue
             digest = _pixel_hash(crop)
+            if n >= len(approved) or approved[n] != digest:
+                skipped["cropNotApproved"] += 1
+                continue
             if digest in exclude:
                 skipped["inGoldenSet"] += 1
                 continue

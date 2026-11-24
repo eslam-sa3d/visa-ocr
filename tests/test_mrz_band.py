@@ -74,8 +74,17 @@ def test_ensemble_accepts_filler_count_difference_and_keeps_the_valid_line(monke
     from app.review import Applicant
     good = _td3_with_optional("ZE184226B")
     merged = [good[0].replace("<<ANNA", "<ANNA") + "<", good[1]]
+    # One '<' for '<<' moves the split between surname and given names, so the second reader cannot confirm the names:
+    # the valid line is kept, the line-2 fields are confirmed, and the names need the form, the page or a person.
     status, res = pipeline.run([b""], None, Applicant(), _ensemble(good, merged))
-    assert status == "done" and res["needsReview"] is False
+    assert status == "done" and res["needsReview"] is True
     assert res["document"]["surname"] == "ERIKSSON" and res["document"]["givenNames"] == "ANNA MARIA"
+    assert res["fieldStatus"]["names"] == "unverified" and res["fieldStatus"]["nationality"] == "both readers agree"
+    form = Applicant(surname="ERIKSSON", given_names="ANNA MARIA")
+    res = pipeline.run([b""], None, form, _ensemble(good, merged))[1]
+    assert res["needsReview"] is False and res["fieldStatus"]["names"] == "confirmed by form"
+    # the merged reading itself is never returned with its wrong split
+    res = pipeline.run([b""], None, Applicant(), _ensemble(merged, good))[1]
+    assert res["document"]["surname"] == "ERIKSSON" and res["needsReview"] is True
     changed = [good[0].replace("ANNA", "ANNE"), good[1]]
     assert pipeline.run([b""], None, Applicant(), _ensemble(good, changed))[1]["needsReview"] is True

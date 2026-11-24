@@ -8,6 +8,7 @@ command -v systemctl >/dev/null || { echo "systemd not found: use the cron line 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 id visaocr >/dev/null 2>&1 || useradd --system --home /opt/visa-ocr --shell /usr/sbin/nologin visaocr
 mkdir -p /etc/visa-ocr
+install -d -m 700 -o visaocr -g visaocr /var/log/visa-ocr      # AUDIT_LOG_FILE of the retraining runs
 if [ ! -f /etc/visa-ocr/autotrain.env ]; then
   install -m 600 "$HERE/autotrain.env.example" /etc/visa-ocr/autotrain.env
   echo "Created /etc/visa-ocr/autotrain.env from the example: edit the paths before the first run."

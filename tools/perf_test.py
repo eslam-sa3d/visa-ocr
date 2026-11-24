@@ -9,6 +9,7 @@ Every result is checked: a job that ends 'done' must carry the right document nu
 """
 from __future__ import annotations
 
+import os
 import argparse
 import concurrent.futures as cf
 import io
@@ -128,7 +129,7 @@ def probe_health(url: str, stop: threading.Event, out: list[float]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:8000")
-    ap.add_argument("--key")
+    ap.add_argument("--key", default=os.environ.get("VISA_OCR_API_KEY") or None, help="API key; better set VISA_OCR_API_KEY so the key is not on the command line, where other accounts and the shell history can see it")
     ap.add_argument("--phase", required=True, choices=["latency", "load", "burst", "soak"])
     ap.add_argument("--kinds", default="TD3,MRVA,TD1,iqama,phone")
     ap.add_argument("--n", type=int, default=10)

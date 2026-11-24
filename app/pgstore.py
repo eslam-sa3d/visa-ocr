@@ -100,9 +100,17 @@ class PgJobStore:
     def submit(self, job_id: str, images: list[bytes], hint: str | None, applicant: dict) -> None:
         from psycopg.types.json import Jsonb
         with self._conn() as c:
-            # images, form data, results and errors are encrypted in the database when DATA_KEY_FILE is set
+            # images, form data, results and errors are encrypted in the database when DATA_KEY_FILE is set, each sealed for
+            # its own job, column and owner
+            owner = self._owner(c, job_id)
             c.execute("UPDATE jobs SET images=%s, hint=%s, applicant=%s, status='queued' WHERE id=%s",
-                      ([crypto.seal(b) for b in images], hint, Jsonb(crypto.seal_json(applicant)), job_id))
+                      ([crypto.seal(b, crypto.job_context(job_id, "images", owner)) for b in images], hint,
+                       Jsonb(crypto.seal_json(applicant, crypto.job_context(job_id, "applicant", owner))), job_id))
+
+    @staticmethod
+    def _owner(c, job_id: str) -> str:
+        row = c.execute("SELECT owner FROM jobs WHERE id=%s", (job_id,)).fetchone()
+        return (row[0] if row else "") or ""
 
     def get(self, job_id: str) -> Job | None:
         # An expired job is never returned; the rows themselves are deleted by sweep() (housekeeping thread and workers), not on
@@ -114,16 +122,23 @@ class PgJobStore:
             return None
         status = "queued" if row[3] == "preparing" else row[3]
         return Job(id=row[0], correlation_id=row[1], owner=row[2], status=status, created_at=row[4],
-                   result=crypto.unseal_json(row[5]), error=crypto.unseal_json(row[6]), consent_training=bool(row[7]))
+                   result=crypto.unseal_json(row[5], crypto.job_context(row[0], "result", row[2] or "")),
+                   error=crypto.unseal_json(row[6], crypto.job_context(row[0], "error", row[2] or "")),
+                   consent_training=bool(row[7]))
 
     def update(self, job_id: str, **changes) -> None:
         from psycopg.types.json import Jsonb
         sets, vals = [], []
+        owner = ""
+        if any(k in ("result", "error") for k in changes):
+            with self._conn() as c:
+                owner = self._owner(c, job_id)
         for key, value in changes.items():
             if key == "status":
                 sets.append("status=%s"); vals.append(value)
             elif key in ("result", "error"):
-                sets.append(f"{key}=%s"); vals.append(Jsonb(crypto.seal_json(value)) if value is not None else None)  # noqa: S608 - fixed names
+                sets.append(f"{key}=%s")  # noqa: S608 - fixed names
+                vals.append(Jsonb(crypto.seal_json(value, crypto.job_context(job_id, key, owner))) if value is not None else None)
             elif key == "consent_training":
                 sets.append("consent_training=%s"); vals.append(bool(value))
         if changes.get("status") in ("done", "failed"):
@@ -151,9 +166,13 @@ class PgJobStore:
         now = time.time()
         cutoff = now - config.job_stale_seconds()
         with self._conn() as c, c.transaction():        # both steps see one state
-            c.execute("UPDATE jobs SET status='failed', images=NULL, hint=NULL, applicant=NULL, error=%s "
-                      "WHERE status='processing' AND locked_ts < %s AND attempts >= %s",
-                      (Jsonb({"code": "internal_error", "message": "Processing failed"}), cutoff, config.job_max_attempts()))
+            dead = c.execute("SELECT id, owner FROM jobs WHERE status='processing' AND locked_ts < %s AND attempts >= %s",
+                             (cutoff, config.job_max_attempts())).fetchall()
+            for job_id, owner in dead:      # the fixed error is sealed for its row like every other stored error
+                c.execute("UPDATE jobs SET status='failed', images=NULL, hint=NULL, applicant=NULL, error=%s "
+                          "WHERE id=%s AND status='processing'",
+                          (Jsonb(crypto.seal_json({"code": "internal_error", "message": "Processing failed"},
+                                                  crypto.job_context(job_id, "error", owner or ""))), job_id))
             # a row left 'preparing' by an API process that stopped between create and submit would hold a slot until the TTL
             c.execute("DELETE FROM jobs WHERE status='preparing' AND created_ts < %s", (cutoff,))
             return c.execute("UPDATE jobs SET status='queued' WHERE status='processing' AND locked_ts < %s", (cutoff,)).rowcount
@@ -169,10 +188,13 @@ class PgJobStore:
         re-queued or failed by the stale sweep gets False and its result is dropped."""
         from psycopg.types.json import Jsonb
         with self._conn() as c:
+            owner = self._owner(c, job_id)
             return c.execute("UPDATE jobs SET status=%s, result=%s, error=%s, images=NULL, hint=NULL, applicant=NULL "
                              "WHERE id=%s AND status='processing' AND attempts=%s",
-                             (status, Jsonb(crypto.seal_json(result)) if result is not None else None,
-                              Jsonb(crypto.seal_json(error)) if error is not None else None, job_id, token)).rowcount == 1
+                             (status, Jsonb(crypto.seal_json(result, crypto.job_context(job_id, "result", owner)))
+                              if result is not None else None,
+                              Jsonb(crypto.seal_json(error, crypto.job_context(job_id, "error", owner)))
+                              if error is not None else None, job_id, token)).rowcount == 1
 
     def claim(self) -> "Claim | None":
         """Take the oldest queued job, or None. Safe with any number of concurrent workers. The returned tuple also carries
@@ -182,10 +204,12 @@ class PgJobStore:
                 "UPDATE jobs SET status='processing', attempts=attempts+1, locked_ts=%s "
                 "WHERE id = (SELECT id FROM jobs WHERE status='queued' AND images IS NOT NULL "
                 "ORDER BY created_ts FOR UPDATE SKIP LOCKED LIMIT 1) "
-                "RETURNING id, images, hint, applicant, attempts", (time.time(),)).fetchone()
+                "RETURNING id, images, hint, applicant, attempts, owner", (time.time(),)).fetchone()
         if not row:
             return None
-        claim = Claim((row[0], [crypto.unseal(b) for b in row[1]], row[2], crypto.unseal_json(row[3]) or {}))
+        owner = row[5] or ""
+        claim = Claim((row[0], [crypto.unseal(b, crypto.job_context(row[0], "images", owner)) for b in row[1]], row[2],
+                       crypto.unseal_json(row[3], crypto.job_context(row[0], "applicant", owner)) or {}))
         claim.token = row[4]
         return claim
 

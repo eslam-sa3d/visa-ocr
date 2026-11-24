@@ -16,8 +16,12 @@ BEFORE YOU START
   [ ] A TLS certificate and key for the service's host name, from your organisation's CA.
 
 1. VERIFY AND LOAD
+     sha256sum SHA256SUMS.txt      -> must equal the value the build owner sent you SEPARATELY (e-mail, ticket, phone),
+                                      not a value that came with this folder: whoever could change the folder could
+                                      change SHA256SUMS.txt too
      sha256sum -c SHA256SUMS.txt
      gunzip -c visa-ocr-@TAG@-amd64.tar.gz | docker load
+     docker image inspect visa-ocr:@TAG@ --format '{{.Id}}'     -> must equal the image id sent with that value
 
 2. MAKE THE KEYS  (once; as root)
      docker run --rm --entrypoint id visa-ocr:@TAG@          -> note the uid of the service user
@@ -50,19 +54,27 @@ BEFORE YOU START
 5. CHECK IT WORKS
      curl --cacert <your CA> https://<host>/healthz                         -> {"status":"ok"}
      curl --cacert <your CA> https://<host>/readyz                          -> {"status":"ready","authEnabled":true}
-     curl --cacert <your CA> -H "X-API-Key: <ops key>" https://<host>/v1/models   -> the models, each "verified"
+   Keys are read from a private header file, so they never appear on a command line (other accounts can see those):
+     umask 077; read -rs K; printf 'X-API-Key: %s\n' "$K" > ops.hdr; read -rs K; printf 'X-API-Key: %s\n' "$K" > portal.hdr; unset K
+     curl --cacert <your CA> -H @ops.hdr https://<host>/v1/models          -> the models, each "verified"
    Upload a test image with the portal key and poll the job:
-     curl --cacert <your CA> -H "X-API-Key: <portal key>" -F "files=@passport.jpg" https://<host>/v1/documents/extract
-     curl --cacert <your CA> -H "X-API-Key: <portal key>" https://<host>/v1/jobs/<jobId>
+     curl --cacert <your CA> -H @portal.hdr -F "files=@passport.jpg" https://<host>/v1/documents/extract
+     curl --cacert <your CA> -H @portal.hdr https://<host>/v1/jobs/<jobId>
+   Delete ops.hdr and portal.hdr when done.
    The full system test is in tools.tar.gz. It draws its own test documents and sends nothing real. It needs a key that
    may do everything, so run it on the TEST environment with a temporary "full" key in keys.json, from a workstation with
    Python 3.12, the packages in requirements-lite.txt and "requests":
-     tar -xzf tools.tar.gz && python tools/system_test.py --url https://<host> --key <full key> --key2 <second full key>
+     tar -xzf tools.tar.gz
+     read -rs VISA_OCR_API_KEY && read -rs VISA_OCR_API_KEY2 && export VISA_OCR_API_KEY VISA_OCR_API_KEY2
+     python tools/system_test.py --url https://<host>
+   Keys go in through the environment (read -rs does not echo them), never as --key on the command line: other accounts on
+   the machine can see command lines, and the shell history keeps them. Run the tools from your own workstation.
 
 6. MEASURE  (before go-live; results go into GO_LIVE_RECORD.md)
    From a workstation with Python 3 and "requests", with a folder of your own sample photos of documents:
      tar -xzf tools.tar.gz
-     python tools/capacity_test.py --url https://<host> --key <portal key> --images <folder> --levels 1,4,16,64
+     read -rs VISA_OCR_API_KEY && export VISA_OCR_API_KEY        # the portal key, typed without echo
+     python tools/capacity_test.py --url https://<host> --images <folder> --levels 1,4,16,64
    It prints, for each number of clients uploading at once: documents read a minute, the median wait and the wait 95 in
    100 uploads stay within. "per minute" stops rising at the service's capacity. Size the servers so that the expected
    uploads a minute at peak are about 60% of it (docs/SERVER_SIZING.md in docs.tar.gz has the arithmetic). GET /readyz
@@ -81,6 +93,11 @@ BEFORE YOU START
    Backup    Back up nothing from the data volume except /data/training if you want to keep corrections beyond a server
              loss. Keep /etc/visa-ocr in your secret store.
    Update    Load the new image, set the new IMAGE_TAG, `docker compose up -d`. To go back, use the old tag.
+             From 1.0.0: stored results are now sealed for their own job and owner, and results written by 1.0.0 are
+             refused. Either update when no job is younger than 60 minutes, or add DATA_ALLOW_UNBOUND_READ=1 to
+             production/visa-ocr.env for the first hour and then remove it.
+   Logs      Rotate /var/log/visa-ocr/audit.log on the host (logrotate with copytruncate) and alert on free space there:
+             when the file cannot be written, /readyz answers 503.
    Scale     Give the container more cores and memory: it starts more readers by itself at the next start. Beyond one
              server, run more containers behind your load balancer and set DATABASE_URL to a PostgreSQL database, so they
              share one queue (tested: an upload sent to one container is read and answered through another).

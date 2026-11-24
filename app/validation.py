@@ -28,7 +28,7 @@ def validate(r: MrzResult, today: date | None = None) -> list[Flag]:
 
     # The name line has no check digit. When letters were removed from it as "misread fillers", or no surname is left, nothing
     # proves the result, so a person confirms the name.
-    removed = [c for c in r.corrected_fields if "filler read as letters removed" in c]
+    removed = [c for c in r.corrected_fields if "filler read as letters removed" in c or "stray letters in filler removed" in c]
     if removed:
         flags.append(Flag("mrz_name_letters_removed", "error",
                           "Letters at the end of the name line were treated as misread fillers and removed ("
@@ -70,6 +70,10 @@ def validate(r: MrzResult, today: date | None = None) -> list[Flag]:
         flags.append(Flag("expiry_date_invalid", "error", "Expiry date is not a valid date"))
     elif date.fromisoformat(r.expiry_date) < today:
         flags.append(Flag("document_expired", "error", f"Document expired on {r.expiry_date}"))
+    elif date.fromisoformat(r.expiry_date).year - today.year > 20:   # the MRZ year has two digits: 99 may be 1999
+        flags.append(Flag("expiry_century_check", "error",
+                          f"Expiry date {r.expiry_date} is more than 20 years ahead. The MRZ year has only two digits, "
+                          "so the document may have expired in the last century. Check the document."))
 
     if r.sex not in ("M", "F", "<", "X"):
         flags.append(Flag("sex_invalid", "error", f"Unexpected sex marker: {r.sex!r}"))
@@ -85,6 +89,15 @@ def validate(r: MrzResult, today: date | None = None) -> list[Flag]:
         if code and code_re.fullmatch(code) and not code.startswith("XX") and not country_name(code):
             flags.append(Flag(f"{label.split()[0].lower()}_code_unknown", "warning",
                               f"{label} code {code!r} is not a known country code. The MRZ may be misread or malformed."))
+
+    from .mrz import _TYPE_LETTERS
+    if not re.fullmatch(r"[A-Z][A-Z0-9]?", r.type_code or "") or r.type_code[0] not in _TYPE_LETTERS.get(r.format, ""):
+        flags.append(Flag("type_code_invalid", "error",
+                          f"Document type code {r.type_code!r} is not used on a {r.format} document. It may have been "
+                          "misread. Check the document type."))
+    if re.search(r"[^A-Z ]", (r.surname or "") + (r.given_names or "")):
+        flags.append(Flag("mrz_name_invalid_characters", "error",
+                          "The MRZ name contains characters that are not letters. It was probably misread. Check the name."))
 
     if not r.document_number:
         flags.append(Flag("document_number_missing", "error", "Document number is empty"))

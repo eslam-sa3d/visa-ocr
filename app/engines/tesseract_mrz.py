@@ -33,9 +33,15 @@ DEADLINE_MARGIN_SECONDS = 0.5        # left for the rest of the job when a hard 
 
 def tessdata_verified(folder, name: str) -> bool:
     """A Tesseract model in MODELS_DIR/tessdata is used only when its SHA-256 is listed in SHA256SUMS beside it
-    ('<hex>  <file name>' per line, as sha256sum writes), unless ALLOW_UNVERIFIED_MODELS=1."""
-    from ..model_registry import allow_unverified
+    ('<hex>  <file name>' per line, as sha256sum writes), unless ALLOW_UNVERIFIED_MODELS=1. With MANIFEST_HMAC_KEY set,
+    SHA256SUMS.sig must hold that file's HMAC (tools/make_checksums.py writes it)."""
+    from ..model_registry import allow_unverified, signed_file_ok
     file = folder / f"{name}.traineddata"
+    if not signed_file_ok(folder / "SHA256SUMS"):
+        # With MANIFEST_HMAC_KEY set the checksum file must be signed with it, as the manifest is: a checksum anyone with
+        # write access to the folder can rewrite proves nothing.
+        log.error("%s is not signed with the manifest key: %s not used", folder / "SHA256SUMS", file.name)
+        return False
     try:
         listed = {parts[-1].lstrip("*"): parts[0].lower() for parts in
                   (ln.split() for ln in (folder / "SHA256SUMS").read_text(encoding="utf-8").splitlines()) if len(parts) >= 2}

@@ -181,12 +181,18 @@ def _tidy_padding(data: str) -> str:
 
 
 def _repair_field(data: str, chk: str, name: str, st: _State) -> str:
+    # A letter after the first '<' is usually a misread filler, but K and '<' give the same check digit, so the check digit
+    # cannot tell which reading is right. The tidy is kept as the likelier value and always counts as a repair: the field is
+    # marked as failed and a person confirms it. A field that passes as read while the tidy one fails is left as read.
     tidy = _tidy_padding(data)
     if tidy != data:
-        if chk.isdigit() and check_digit(data) == int(chk) and check_digit(tidy) != int(chk):
-            tidy = data                       # the unchanged text passes its check digit and the tidy one does not: keep it
+        passes = chk.isdigit() and check_digit(data) == int(chk)
+        if passes and check_digit(tidy) != int(chk):
+            tidy = data
         else:
             st.corrected.append(f"{name}:stray character in filler removed")
+            st.failed_before_repair.add(_CHECK_KEY[name])
+            st.repaired.append(f"{name}:{data.rstrip(FILLER)}->{tidy.rstrip(FILLER)}")
             data = tidy
     fixed = _repair_by_check_digit(data, chk)
     if fixed is None:

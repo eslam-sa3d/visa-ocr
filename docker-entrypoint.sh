@@ -2,6 +2,12 @@
 # Serves HTTPS on PORT (default 443). Use your own certificate: mount it and set TLS_CERT and TLS_KEY.
 # Without one, a SELF-SIGNED certificate is generated so the service starts; browsers will warn. Test use only.
 set -eu
+# PRODUCTION is read by the same rule as the service (app/config.py): on, off, or refuse to start.
+case "$(printf '%s' "${PRODUCTION:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' \t')" in
+  1|true|yes|on) PROD=1 ;;
+  ""|0|false|no|off) PROD=0 ;;
+  *) echo "ERROR: PRODUCTION has a value that is neither 1 nor 0 ('${PRODUCTION}'). Put comments on their own line in the env file." >&2; exit 1 ;;
+esac
 umask 077        # files the service creates (database, TLS key, training data) are owner-only
 PORT="${PORT:-443}"
 # The service user has no home folder of its own; libraries that keep a small cache get one on the data volume.
@@ -31,7 +37,7 @@ for f in "$CERT" "$KEY"; do
   fi
 done
 if [ ! -f "$CERT" ] || [ ! -s "$CERT" ] || [ ! -f "$KEY" ] || [ ! -s "$KEY" ]; then
-  if [ "${PRODUCTION:-0}" = "1" ]; then
+  if [ "$PROD" = "1" ]; then
     echo "ERROR: PRODUCTION=1 and no TLS certificate at $CERT. Mount your certificate and key (TLS_CERT, TLS_KEY); a self-signed one is not generated in production." >&2
     exit 1
   fi

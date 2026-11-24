@@ -20,17 +20,18 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import audit, config, crypto, photo, pipeline, readers, security, worker, quality
+from . import audit, config, crypto, photo, pipeline, readers, security, training_store, worker, quality
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
@@ -128,6 +129,8 @@ def production_problems() -> list[str]:
         out.append("stored personal data is not encrypted (set DATA_KEY_FILE, or DATA_AT_REST_ENCRYPTED=1 on encrypted volumes)")
     if os.environ.get("ALLOW_ANONYMOUS", "").strip() == "1":
         out.append("ALLOW_ANONYMOUS is set")
+    if os.environ.get("DATA_ALLOW_PLAINTEXT_READ", "").strip() == "1":
+        out.append("stored data that is not encrypted is accepted (DATA_ALLOW_PLAINTEXT_READ)")
     return out
 
 
@@ -194,6 +197,8 @@ def readyz() -> dict:
     if engine in ("auto", "paddle-ocr"):
         for p in _model_problems():
             (warnings if engine == "auto" and p.endswith("is missing") else problems).append(p)
+    if audit.write_failed:
+        problems.append("the security event log (AUDIT_LOG_FILE) cannot be written")
     if problems:
         raise HTTPException(503, {"code": "not_ready", "message": "; ".join(problems)})
     # The service cannot see whether its volumes are encrypted. The operator confirms it; until then every readiness answer
@@ -267,6 +272,15 @@ def mrz_parse(body: MrzParseRequest, request: Request, owner: str = Depends(secu
     return result
 
 
+def _decode_slots() -> asyncio.Semaphore:
+    """At most two full-size decodes in memory at a time, on every route that decodes an upload (extract and both checks).
+    Waiting requests queue here on the event loop and hold no pool thread."""
+    global _shrink_slots
+    if _shrink_slots is None:
+        _shrink_slots = asyncio.Semaphore(2)
+    return _shrink_slots
+
+
 def _process(job_id: str, images: list[bytes], hint: str | None, applicant: Applicant) -> None:
     try:
         worker.process_job(store, job_id, images, hint, applicant, lambda: get_engine())   # looked up per call (tests patch it)
@@ -284,7 +298,8 @@ async def check_image(request: Request, file: UploadFile = File(...), owner: str
     security.allow(request, "upload", owner)
     data = await file.read(config.max_bytes() + 1)
     validate_image(data, file.content_type)
-    q = await run_in_threadpool(quality.measure, data)
+    async with _decode_slots():
+        q = await run_in_threadpool(quality.measure, data)
     reasons = q.issues or q.doubts
     body = {"clear": q.clear, "acceptable": not q.issues, "quality": q.to_dict()}
     if reasons:
@@ -315,16 +330,13 @@ async def extract(
     if job is None:
         raise HTTPException(503, {"code": "busy", "message": "The service is busy; try again shortly"},
                             headers={"Retry-After": "10"})
-    global _shrink_slots
-    if _shrink_slots is None:
-        _shrink_slots = asyncio.Semaphore(2)       # at most two full-size decodes in memory at a time
     try:
         images: list[bytes] = []
         for f in files:
             data = await f.read(config.max_bytes() + 1)
             validate_image(data, f.content_type)
             await run_in_threadpool(scan_for_malware, data)        # only when UPLOAD_SCAN_COMMAND is set
-            async with _shrink_slots:              # decode and resize off the event loop
+            async with _decode_slots():            # decode and resize off the event loop
                 images.append(await run_in_threadpool(shrink_for_ocr, data))   # queue, readers and training store get this image
         if config.refuse_unclear_at_upload():
             # Measured from the pixels in a fraction of a second: an unusable photo is answered now, not when its turn comes.
@@ -334,8 +346,12 @@ async def extract(
                 raise HTTPException(422, {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
                                           "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()})
         if consent_training and training.enabled:
-            training.save_images(job.id, images)
-            store.update(job.id, consent_training=True)
+            try:
+                training.save_images(job.id, images)
+                store.update(job.id, consent_training=True)
+            except training_store.StoreFull:
+                # the reading goes on; only the copy for training is not kept
+                audit.event("training_store_full", job=job.id)
         applicant = _applicant(nationality=expected_nationality, surname=expected_surname, given_names=expected_given_names,
                                document_number=expected_document_number, birth_date=expected_birth_date,
                                expiry_date=expected_expiry_date)
@@ -343,6 +359,11 @@ async def extract(
             store.submit(job.id, images, doc_type_hint, worker.applicant_dict(applicant))
         else:
             with _inflight_lock:
+                # The store's count frees a slot when the sweep fails a job that waited too long, but its work is still in
+                # this process. Admission also counts what the process still holds, so the cap keeps limiting real work.
+                if len(_inflight) >= config.max_pending_jobs():
+                    raise HTTPException(503, {"code": "busy", "message": "The service is busy; try again shortly"},
+                                        headers={"Retry-After": "10"})
                 _inflight.add(job.id)
             _ocr_pool.submit(_process, job.id, images, doc_type_hint, applicant)
     except BaseException:
@@ -409,7 +430,8 @@ async def check_photo(request: Request, file: UploadFile = File(...), owner: str
     data = await file.read(config.max_bytes() + 1)
     validate_image(data, file.content_type)
     try:
-        verdict = await run_in_threadpool(photo.check, data)
+        async with _decode_slots():
+            verdict = await run_in_threadpool(photo.check, data)
     except photo.Unavailable as exc:
         raise HTTPException(503, {"code": "photo_check_unavailable", "message": str(exc)}) from None
     audit.event("photo_checked", key=owner, acceptable=verdict["acceptable"], issues=",".join(verdict["issues"]))
@@ -421,30 +443,44 @@ def _own_job(job_id: str, owner: str, any_job: bool = False):
     # PostgreSQL raise).
     job = store.get(job_id) if re.fullmatch(r"[0-9a-f]{32}", job_id) else None
     # A reviewer or administrator key may open any job; every other key only its own.
-    if job is None or (owner != "anonymous" and job.owner != owner and not any_job):   # same answer for "not yours" and "not found"
+    if job is not None and owner != "anonymous" and job.owner != owner and not any_job:
+        audit.event("job_read_refused", job=job.id, key=owner)     # another key's job: recorded, answered as not found
+        job = None
+    if job is None:                                # same answer for "not yours" and "not found"
         raise HTTPException(404, {"code": "job_not_found", "message": "Unknown or expired job id"})
     return job
 
 
 @app.get("/v1/jobs/{job_id}")
 def get_job(job_id: str, request: Request, owner: str = Depends(security.authenticate)) -> dict:
-    security.allow(request, "read", owner)
-    return _own_job(job_id, owner, security.may_read_any(request)).to_dict()
+    role = security.allow(request, "read", owner)
+    job = _own_job(job_id, owner, security.may_read_any(request))
+    if job.owner != owner:
+        # A reviewer or administrator opening another key's job reads an applicant's data: always recorded. The owner's own
+        # polling is not, since the portal asks every second or two.
+        audit.event("job_read", job=job.id, key=owner, role=role, cross_owner=True)
+    return job.to_dict()
+
+
+def _plain(v: str, what: str) -> str:
+    """Stored text is shown to a second person in a terminal: no control, formatting or direction-changing characters.
+    Arabic needs none of them; the two joiners (U+200C, U+200D) are allowed."""
+    if any((not c.isprintable() or unicodedata.category(c) == "Cf") and c not in "\u200c\u200d" for c in v):
+        raise ValueError(f"{what}: control and formatting characters are not allowed")
+    return v
 
 
 class LineLabel(BaseModel):
     """One text line a reviewer marked on an uploaded image (used to cut training crops)."""
-    image: int = Field(ge=0, description="Index of the uploaded image")
-    box: list[int] = Field(min_length=4, max_length=4, description="x1, y1, x2, y2 in pixels")
+    image: int = Field(ge=0, le=63, description="Index of the uploaded image")
+    box: list[Annotated[int, Field(ge=0, le=100_000)]] = Field(min_length=4, max_length=4, description="x1, y1, x2, y2 in pixels")
     text: str = Field(min_length=1, max_length=200)
     lang: Literal["en", "ar"]
 
     @field_validator("text")
     @classmethod
     def _no_control_chars(cls, v: str) -> str:
-        if any(ord(c) < 32 or ord(c) == 127 or c in "\x85\u2028\u2029" for c in v):
-            raise ValueError("control characters (tab, line break) are not allowed")
-        return v
+        return _plain(v, "text")
 
 
 class CorrectionRequest(BaseModel):
@@ -452,16 +488,26 @@ class CorrectionRequest(BaseModel):
     document: dict[str, str] = Field(default_factory=dict, description="Corrected field values")
     lines: list[LineLabel] = Field(default_factory=list, max_length=200)
 
+    @field_validator("reviewer")
+    @classmethod
+    def _plain_reviewer(cls, v: str) -> str:
+        return _plain(v, "reviewer")
+
     @field_validator("document")
     @classmethod
     def _bounded_document(cls, v: dict[str, str]) -> dict[str, str]:
         if len(v) > 50 or any(len(k) > 64 or len(x) > 500 for k, x in v.items()):
             raise ValueError("document has too many fields or a field that is too long")
+        for k, x in v.items():
+            _plain(k, "document field name")
+            _plain(x, "document field value")
         return v
 
 
 @app.post("/v1/jobs/{job_id}/corrections", status_code=201)
 def add_correction(job_id: str, body: CorrectionRequest, request: Request, owner: str = Depends(security.authenticate)) -> dict:
+    # Its own limit, always on (also when RATE_LIMIT_PER_MIN=0): each correction is a file on the volume that holds the jobs
+    security.limiter.check("correct:" + security.client_id(request, owner), limit=config.corrections_per_minute())
     security.allow(request, "correct", owner)
     job = _own_job(job_id, owner, security.may_read_any(request))
     if not training.enabled:
@@ -475,12 +521,16 @@ def add_correction(job_id: str, body: CorrectionRequest, request: Request, owner
     # beside it: which fields the reviewer changed, and how confident the reading was, are what the confidence thresholds
     # are later checked against (tools/calibration_report.py).
     before = (job.result or {}).get("document") or {}
-    changed = sorted(k for k, v in body.document.items() if str(before.get(k, "") or "") != v)
+    # Only fields the result holds count as checked or changed: a key the reader never returned says nothing about it.
+    checked = sorted(k for k in body.document if k in before)
+    changed = [k for k in checked if str(before.get(k, "") or "") != body.document[k]]
     ocr = {"engine": (job.result or {}).get("engine"), "needsReview": (job.result or {}).get("needsReview"),
            "confidence": ((job.result or {}).get("confidence") or {}).get("mrz"), "fieldsChanged": changed,
-           "fieldsChecked": sorted(body.document)}
+           "fieldsChecked": checked}
     try:
         training.save_correction(job_id, {**body.model_dump(), "submittedBy": owner, "ocr": ocr})
+    except training_store.StoreFull as exc:
+        raise HTTPException(429, {"code": "too_many_corrections", "message": str(exc)}) from None
     except FileNotFoundError:                      # purged since the upload (retention, or consent withdrawn)
         raise HTTPException(409, {"code": "no_training_consent",
                                   "message": "Training data for this job was removed"}) from None

@@ -73,7 +73,16 @@ def agreement_confidence() -> float: return _float("AGREEMENT_CONFIDENCE", 0.99)
 def api_docs() -> bool: return _flag("API_DOCS")
 def training_store_dir() -> str: return os.environ.get("TRAINING_STORE_DIR", "")
 def storage_encrypted() -> bool: return _flag("DATA_AT_REST_ENCRYPTED")     # operator confirms the data volumes are encrypted
-def production() -> bool: return _flag("PRODUCTION")                         # refuse to start in any unsafe set-up (see main.py)
+def production() -> bool:
+    """PRODUCTION=1 refuses to start in any unsafe set-up (see main.py). A value that is neither on nor off (a comment left
+    after the value by an env file, a typing slip) stops the service: an unclear production flag must not mean "off"."""
+    raw = os.environ.get("PRODUCTION", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("", "0", "false", "no", "off"):
+        return False
+    raise RuntimeError(f"PRODUCTION has the value {raw[:40]!r}, which is neither 1 nor 0. Put comments on their own line in "
+                       "the env file; docker run --env-file keeps them as part of the value.")
 def ui_enabled() -> bool: return _flag("UI_ENABLED", not production())      # the built-in test page; off in production
 def upload_scan_command() -> str: return os.environ.get("UPLOAD_SCAN_COMMAND", "").strip()   # e.g. "clamdscan --no-summary"
 def upload_scan_seconds() -> float: return max(1.0, _float("UPLOAD_SCAN_SECONDS", 20.0))
@@ -197,3 +206,18 @@ def refuse_unclear_at_upload() -> bool: return quality_check() and os.environ.ge
 def quality_thresholds() -> dict:
     """QUALITY_<NAME>=value overrides one threshold, e.g. QUALITY_SHARPNESS_REJECT=20."""
     return {k: _float("QUALITY_" + k.upper(), v) for k, v in _QUALITY_DEFAULTS.items()}
+
+
+def corrections_per_minute() -> int:
+    """Corrections one client may post per minute. Always on, also when RATE_LIMIT_PER_MIN=0."""
+    return max(1, _int("CORRECTIONS_PER_MIN", 30))
+
+
+def max_corrections_per_job() -> int:
+    return max(1, _int("MAX_CORRECTIONS_PER_JOB", 10))
+
+
+def training_min_free_bytes() -> int:
+    """New training writes (corrections, consented images) stop while the store's volume has less free space than this."""
+    return max(0, _int("TRAINING_MIN_FREE_BYTES", 2 * 1024 ** 3))
+

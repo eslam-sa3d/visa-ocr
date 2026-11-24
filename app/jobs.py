@@ -155,8 +155,12 @@ class SqliteJobStore:
     def _purge(self, c: sqlite3.Connection) -> None:
         now = time.time()
         c.execute("DELETE FROM jobs WHERE created_ts < ?", (now - self.ttl,))
-        c.execute("UPDATE jobs SET status='failed', error=? WHERE status IN ('queued','processing') AND created_ts < ?",
-                  (json.dumps(TIMED_OUT), now - config.job_max_seconds()))      # stuck jobs: see JobStore._purge_locked
+        # stuck jobs: see JobStore._purge_locked. The error is sealed for its own row, like every other stored value.
+        stuck = c.execute("SELECT id, owner FROM jobs WHERE status IN ('queued','processing') AND created_ts < ?",
+                          (now - config.job_max_seconds(),)).fetchall()
+        for job_id, owner in stuck:
+            c.execute("UPDATE jobs SET status='failed', error=? WHERE id = ? AND status IN ('queued','processing')",
+                      (crypto.seal_text(json.dumps(TIMED_OUT), crypto.job_context(job_id, "error", owner or "")), job_id))
 
     def create(self, correlation_id: str, owner: str = "") -> Job:
         job = Job(id=uuid.uuid4().hex, correlation_id=correlation_id, owner=owner)
@@ -197,16 +201,25 @@ class SqliteJobStore:
         if not row:
             return None
         return Job(id=row[0], correlation_id=row[1], owner=row[2], status=row[3], created_at=row[4],
-                   result=json.loads(crypto.unseal_text(row[5])) if row[5] else None,
-                   error=json.loads(crypto.unseal_text(row[6])) if row[6] else None,
+                   result=json.loads(crypto.unseal_text(row[5], crypto.job_context(row[0], "result", row[2] or ""))) if row[5] else None,
+                   error=json.loads(crypto.unseal_text(row[6], crypto.job_context(row[0], "error", row[2] or ""))) if row[6] else None,
                    consent_training=bool(row[7]))
 
     def update(self, job_id: str, **changes) -> None:
         cols, vals = [], []
+        owner = None
+        if any(k in ("result", "error") for k in changes):
+            with self._lock, self._conn() as c:
+                row = c.execute("SELECT owner FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                return
+            owner = row[0] or ""
         for key, value in changes.items():
             if key in ("result", "error"):
-                # results hold the applicant's data: encrypted in the file when DATA_KEY_FILE is set
-                value = crypto.seal_text(json.dumps(value, ensure_ascii=False)) if value is not None else None
+                # results hold the applicant's data: encrypted in the file when DATA_KEY_FILE is set, and sealed for this
+                # job, column and owner, so a value moved to another row or a changed owner column does not open
+                value = (crypto.seal_text(json.dumps(value, ensure_ascii=False), crypto.job_context(job_id, key, owner))
+                         if value is not None else None)
             elif key == "consent_training":
                 value = int(bool(value))
             elif key not in ("status",):

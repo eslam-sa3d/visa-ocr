@@ -47,6 +47,18 @@ def approved_correction(job_dir: Path) -> dict | None:
     return None
 
 
+class StoreFull(RuntimeError):
+    """No more training data is accepted right now: too many corrections for one job, or too little free space."""
+
+
+def record_digest(rec: dict) -> str:
+    """A short fingerprint of what a correction says. --show prints it and --approve must name it, so the record approved is
+    the record the approver read, and not one posted after they looked."""
+    import hashlib  # noqa: WPS433
+    body = {k: rec.get(k) for k in ("reviewer", "submittedBy", "document", "lines", "createdAt")}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
 def _ext(data: bytes) -> str:
     return "png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "jpg"
 
@@ -71,9 +83,20 @@ class TrainingStore:
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         return d
 
+    def _room_left(self) -> bool:
+        from . import config  # noqa: WPS433
+        assert self.root is not None
+        probe = self.root if self.root.exists() else self.root.parent
+        try:
+            return shutil.disk_usage(probe).free >= config.training_min_free_bytes()
+        except OSError:
+            return True
+
     def save_images(self, job_id: str, images: list[bytes]) -> int:
         if self.root is not None and (self.root / "withdrawn" / job_id).exists():
             raise FileNotFoundError("training data for this job was removed")
+        if not self._room_left():
+            raise StoreFull("the training store's volume is nearly full")
         d = self._job_dir(job_id) / "images"
         d.mkdir(exist_ok=True, mode=0o700)
         for i, data in enumerate(images):
@@ -95,6 +118,11 @@ class TrainingStore:
                   "status": "pending", "approvedBy": None}        # the caller cannot approve its own submission
         folder = d / "corrections"
         folder.mkdir(exist_ok=True, mode=0o700)
+        from . import config  # noqa: WPS433
+        if sum(1 for _ in folder.glob("*.json")) >= config.max_corrections_per_job():
+            raise StoreFull("no more corrections can be stored for this job")
+        if not self._room_left():
+            raise StoreFull("the training store's volume is nearly full")
         path = folder / f"{time.time_ns()}.json"                   # append-only: an earlier correction is never overwritten
         path.write_text(crypto.seal_text(json.dumps(record, indent=2, ensure_ascii=False)), encoding="utf-8")
         path.chmod(0o600)
@@ -114,9 +142,11 @@ class TrainingStore:
             return (0, c) if isinstance(c, (int, float)) else (1, 0.0)     # known confidence first, lowest first
         return sorted(out, key=conf)
 
-    def decide(self, job_id: str, approver: str, approve: bool = True, note: str = "") -> Path:
-        """Approve or reject the newest pending correction of a job. The approver must be a different person from the one
-        who submitted it: a single account must not be able to put a label into the training data on its own."""
+    def decide(self, job_id: str, approver: str, approve: bool = True, note: str = "", correction: str = "",
+               approved_crops: list | None = None) -> Path:
+        """Approve or reject one pending correction, named by its file name or digest as --show prints them: the record decided
+        is the one the approver read, never one posted afterwards. The approver must be a different person from the one who
+        submitted it: a single account must not be able to put a label into the training data on its own."""
         assert self.root is not None
         approver = approver.strip()
         if not approver or not job_id.isalnum():
@@ -124,18 +154,25 @@ class TrainingStore:
         waiting = [(p, r) for p, r in load_corrections(self.root / "jobs" / job_id) if r.get("status") == "pending"]
         if not waiting:
             raise FileNotFoundError("no pending correction for this job")
-        path, rec = waiting[-1]
+        chosen = [(p, r) for p, r in waiting if correction and correction.strip() in (p.name, record_digest(r))]
+        if len(chosen) != 1:
+            raise ValueError("name the correction to decide with --correction: its file name or digest, as --show prints it")
+        path, rec = chosen[0]
         same = {str(rec.get("reviewer", "")).strip().casefold(), str(rec.get("submittedBy", "")).strip().casefold()}
         if approve and approver.casefold() in same:
             raise PermissionError("a correction cannot be approved by the person who submitted it")
+        digest = record_digest(rec)
         rec.update(status="approved" if approve else "rejected", approvedBy=approver if approve else None,
-                   decidedBy=approver, decidedAt=datetime.now(timezone.utc).isoformat(), decisionNote=note)
+                   decidedBy=approver, decidedAt=datetime.now(timezone.utc).isoformat(), decisionNote=note,
+                   approvedDigest=digest if approve else None,
+                   approvedCrops=list(approved_crops or []) if approve else [])
         tmp = path.with_suffix(".tmp")
         tmp.write_text(crypto.seal_text(json.dumps(rec, indent=2, ensure_ascii=False)), encoding="utf-8")
         tmp.chmod(0o600)
         os.replace(tmp, path)
         from . import audit  # noqa: WPS433
-        audit.event("correction_decided", job=job_id, decision=rec["status"], lines=len(rec.get("lines") or []))
+        audit.event("correction_decided", job=job_id, decision=rec["status"], lines=len(rec.get("lines") or []),
+                    approver=approver, submitted_by=str(rec.get("submittedBy", ""))[:16], file=path.name, digest=digest)
         return path
 
     def remove(self, job_id: str, tombstone: bool = False) -> bool:
@@ -168,6 +205,9 @@ class TrainingStore:
                     removed += 1
             except OSError:
                 continue
+        if removed:
+            from . import audit  # noqa: WPS433
+            audit.event("training_data_purged", folders=removed, older_than_days=days)
         marks = self.root / "withdrawn"
         if marks.is_dir():                         # a marker is only needed while the job row can still exist
             for m in marks.iterdir():

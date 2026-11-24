@@ -7,8 +7,10 @@
 
     python tools/read_folder.py /secure/testdata --out /secure/testdata-results [--engine auto] [--minutes 30]
 
-The run can be stopped and started again: images already in results.jsonl are skipped. sheet.csv holds personal data, so keep
-the output folder next to the images, outside the repository.
+The run can be stopped and started again: images already in results.jsonl are skipped. sheet.csv and review.html hold personal
+data: the output folder and its files are created for your account only (0700/0600). Keep it next to the images, outside the
+repository, and delete it when the checking is done. A value that starts with = + - or @ is written to sheet.csv with a
+leading apostrophe, so a spreadsheet shows it as text and never runs it.
 
 A person then checks sheet.csv against the documents: correct any wrong value in place and write "yes" in the confirmed column.
 Rows marked yes become the answer file that tools/accuracy_real.py scores against:
@@ -38,6 +40,21 @@ SHEET_FIELDS = ["documentNumber", "idNumber", "surname", "givenNames", "nameEn",
                 "expiryDate", "sex"]
 SHEET_HEADER = ["file", "type", *SHEET_FIELDS, "confirmed"]
 IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp")
+
+
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def cell(value) -> str:
+    """A value as written to sheet.csv: text printed on a document can start with = + - or @, which a spreadsheet would run
+    as a formula. Such a value is written with a leading apostrophe, which the spreadsheet shows as text."""
+    v = "" if value is None else str(value)
+    return "'" + v if v.startswith(_FORMULA_START) else v
+
+
+def uncell(value: str) -> str:
+    v = value or ""
+    return v[1:] if v.startswith("'") and v[1:].startswith(_FORMULA_START) else v
 
 
 def _images(folder: Path) -> list[Path]:
@@ -103,7 +120,7 @@ def make_labels(out: Path) -> int:
     with open(out / "sheet.csv", newline="", encoding="utf-8-sig") as fh:
         for r in csv.DictReader(fh):
             if (r.get("confirmed") or "").strip().lower() in ("yes", "y", "1", "true"):
-                entry = {k: r[k].strip() for k in SHEET_FIELDS if (r.get(k) or "").strip()}
+                entry = {k: uncell(r[k].strip()) for k in SHEET_FIELDS if (r.get(k) or "").strip()}
                 if r.get("type"):
                     entry["type"] = r["type"].strip()
                 labels[r["file"]] = entry
@@ -126,12 +143,17 @@ label{display:grid;grid-template-columns:150px 1fr;gap:8px;margin:4px 0;align-it
 input{font:15px ui-monospace,Menlo,monospace;padding:5px 7px;border:1px solid #b6bcc6;border-radius:5px;width:100%;box-sizing:border-box}
 .name{font-size:12px;color:#5b6470;word-break:break-all;margin-bottom:6px}.acts{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
 </style></head><body>
-<header><b id="count"></b><button onclick="only()">Show only unconfirmed</button><button class="go" onclick="save()">Save sheet</button></header>
+<header><b id="count"></b><button onclick="only()">Show only unconfirmed</button><button class="go" onclick="save()">Save sheet</button><button onclick="forget()">Forget values kept in this browser</button></header>
 <div id="rows"></div>
 <script>
 const FIELDS=__FIELDS__, ROWS=__ROWS__, BASE=__BASE__, KEY="visa-ocr-review:"+location.pathname;
-let state={}; try{state=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){}
-function keep(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){} count()}
+// The values typed here are personal data. They are kept in this browser only until the sheet is saved, and never longer
+// than 14 days; "Forget values kept in this browser" removes them at once.
+const DAYS=14;
+let state={}; try{const kept=JSON.parse(localStorage.getItem(KEY)||"{}");
+  if(kept.at&&Date.now()-kept.at<DAYS*864e5)state=kept.rows||{};else localStorage.removeItem(KEY)}catch(e){}
+function keep(){try{localStorage.setItem(KEY,JSON.stringify({at:Date.now(),rows:state}))}catch(e){} count()}
+function forget(){try{localStorage.removeItem(KEY)}catch(e){} document.getElementById("count").textContent="Values kept in this browser were removed."}
 function count(){const n=ROWS.filter(r=>(state[r.file]||{}).confirmed==="yes").length;
   document.getElementById("count").textContent=n+" of "+ROWS.length+" confirmed. Correct any wrong value, then press Confirm."}
 function draw(){const box=document.getElementById("rows");
@@ -149,10 +171,12 @@ function draw(){const box=document.getElementById("rows");
     mk("Turn image",null,()=>{turn=(turn+1)%4;img.className=turn?"turn"+turn:""});
     right.appendChild(acts);d.appendChild(left);d.appendChild(right);box.appendChild(d)});count()}
 function only(){ROWS.forEach((r,i)=>{if((state[r.file]||{}).confirmed)document.getElementById("r"+i).style.display="none"})}
-function save(){const q=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';const head=["file","type",...FIELDS,"confirmed"];
+function save(){const safe=v=>{v=String(v==null?"":v);return /^[=+@\\t\\r-]/.test(v)?"'"+v:v};
+  const q=v=>'"'+safe(v).replace(/"/g,'""')+'"';const head=["file","type",...FIELDS,"confirmed"];
   const lines=[head.join(",")];ROWS.forEach(r=>{const s=state[r.file]||{};
     lines.push([r.file,r.type||"",...FIELDS.map(f=>(f in s)?s[f]:(r[f]||"")),s.confirmed==="yes"?"yes":""].map(q).join(","))});
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\\ufeff"+lines.join("\\r\\n")+"\\r\\n"],{type:"text/csv"}));a.download="sheet.csv";a.click()}
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\\ufeff"+lines.join("\\r\\n")+"\\r\\n"],{type:"text/csv"}));a.download="sheet.csv";a.click();
+  setTimeout(()=>{forget();document.getElementById("count").textContent="Sheet saved; the values kept in this browser were removed."},500)}
 draw();
 </script></body></html>
 """
@@ -179,7 +203,10 @@ def main() -> int:
     ap.add_argument("--make-labels", action="store_true", help="turn the confirmed rows of sheet.csv into labels.json")
     ap.add_argument("--review-page", action="store_true", help="write review.html: each image beside what was read, to confirm")
     a = ap.parse_args()
-    a.out.mkdir(parents=True, exist_ok=True)
+    import os
+    os.umask(0o077)               # results, sheet.csv and review.html hold what was read from identity documents
+    a.out.mkdir(parents=True, exist_ok=True, mode=0o700)
+    a.out.chmod(0o700)
     if a.make_labels:
         return make_labels(a.out)
     if a.review_page:
@@ -212,7 +239,7 @@ def main() -> int:
                 rf.write(json.dumps(rows[name], ensure_ascii=False) + "\n")
                 rf.flush()
                 if row["status"] == "done":
-                    writer.writerow({"file": name, **fields, "confirmed": ""})
+                    writer.writerow({"file": name, **{k: cell(v) for k, v in fields.items()}, "confirmed": ""})
                     sf.flush()
                 if n % 10 == 0:
                     print(f"  {n}/{len(todo)}", flush=True)

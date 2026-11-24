@@ -111,14 +111,13 @@ def shrink_for_ocr(data: bytes) -> bytes:
             if img.format == "JPEG" and not small:
                 img.draft("RGB", (limit, limit))            # decode at a reduced scale: several times faster
             img = ImageOps.exif_transpose(img)
-            if see_through:
-                img = img.convert("RGBA")
-                paper = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                img = Image.alpha_composite(paper, img)
-            img = img.convert("RGB")
+            img = img.convert("RGBA" if see_through else "RGB")
             ratio = 1 if small else limit / max(img.size)
-            if ratio < 1:
+            if ratio < 1:                                 # reduce first: the white paper below is then working-size
                 img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))), Image.LANCZOS)
+            if see_through:
+                img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img)
+            img = img.convert("RGB")
             out = io.BytesIO()
             if small:
                 img.save(out, "PNG", compress_level=1)      # not shrunk: keep every pixel as it was

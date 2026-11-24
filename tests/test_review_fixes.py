@@ -26,6 +26,7 @@ from app.model_registry import ManifestError, ModelInfo, Registry, dir_sha256  #
 from app.training_store import TrainingStore, approved_correction  # noqa: E402
 from tests.test_auto_train import _args, _current_model, _runner, _store  # noqa: E402
 from tests.test_model_and_training import MRZ, FakePaddleOCR, png_bytes, registry_with_models  # noqa: E402
+from tests.approval import approve
 
 
 # ---------------------------------------------------------------------------------------------------- offline (O-01, O-03)
@@ -232,6 +233,9 @@ def _job(store: Path, name: str, record: dict | str, size=(600, 200)) -> Path:
     (job / "images").mkdir(parents=True)
     Image.new("RGB", size, "white").save(job / "images" / "0.png")
     (job / "corrections").mkdir()
+    if isinstance(record, dict) and record.get("status") == "approved" and "approvedCrops" not in record:
+        from tests.approval import crops
+        record = {**record, "approvedCrops": crops(job, record)}      # what the approver was shown
     text = record if isinstance(record, str) else json.dumps(record)
     (job / "corrections" / f"{time.time_ns()}.json").write_text(text, encoding="utf-8")
     return job
@@ -268,8 +272,8 @@ def test_api_cannot_approve_its_own_correction_and_approval_needs_another_person
     assert approved_correction(job) is None and len(ts.pending()) == 1
     for same in ("amal", "AMAL ", "key123"):
         with pytest.raises(PermissionError):
-            ts.decide("job1", same)
-    ts.decide("job1", "omar")
+            approve(ts, "job1", same)
+    approve(ts, "job1", "omar")
     assert approved_correction(job)["approvedBy"] == "omar" and ts.pending() == []
 
 
@@ -336,11 +340,15 @@ def test_correction_records_what_the_reader_got_wrong_and_calibration_reads_it(t
         ts.save_images(f"job{n}", [png_bytes()])
         ts.save_correction(f"job{n}", {"reviewer": "a", "lines": [], "ocr": {"confidence": conf, "needsReview": conf is None,
                                                                               "fieldsChanged": changed, "fieldsChecked": ["surname"]}})
+    assert calibration_report.report(store, 0.97)["acceptedWithoutReview"]["documents"] == 0   # pending: not evidence
+    order = [r["ocr"]["confidence"] for _, r in TrainingStore(store).pending()][:2]
+    for n in range(4):
+        approve(TrainingStore(store), f"job{n}", "omar")
     out = calibration_report.report(store, 0.97)
     assert out["byConfidence"]["0.95-1.00"] == {"documents": 2, "wrong": 1, "errorRate": 0.5}
     assert out["byConfidence"]["0.50-0.80"]["wrong"] == 1 and out["byConfidence"]["no confidence"]["documents"] == 1
     assert out["acceptedWithoutReview"] == {"documents": 2, "wrong": 1, "errorRate": 0.5}
-    assert [r["ocr"]["confidence"] for _, r in TrainingStore(store).pending()][:2] == [0.6, 0.99]     # least confident first
+    assert order == [0.6, 0.99]                                                                     # least confident first
 
 
 # ------------------------------------------------------------------------------------------ model switch (T-05..T-07, S-01)
@@ -780,7 +788,7 @@ def test_training_store_and_job_database_are_encrypted_with_a_key(tmp_path, data
     image = png_bytes()
     ts.save_images("job1", [image])
     ts.save_correction("job1", {"reviewer": "amal", "lines": [_line("SECRETSURNAME")]})
-    ts.decide("job1", "omar")
+    approve(ts, "job1", "omar")
     job = tmp_path / "store" / "jobs" / "job1"
     raw_files = [p.read_bytes() for p in job.rglob("*") if p.is_file()]
     assert all(b.startswith(crypto.PREFIX) for b in raw_files) and not any(b"SECRETSURNAME" in b or b"PNG" in b[:8] for b in raw_files)
@@ -813,7 +821,11 @@ def test_key_rotation_wrong_key_and_data_written_before_the_key(tmp_path, monkey
     monkeypatch.setenv("DATA_KEY_FILE", str(key_file))
     sealed = crypto.seal(b"passport image")
     assert sealed != b"passport image" and crypto.unseal(sealed) == b"passport image"
+    with pytest.raises(crypto.DataKeyError):                                              # plain data is refused...
+        crypto.unseal(b"written before the key")
+    monkeypatch.setenv("DATA_ALLOW_PLAINTEXT_READ", "1")                                  # ...unless a migration says so
     assert crypto.unseal(b"written before the key") == b"written before the key"
+    monkeypatch.delenv("DATA_ALLOW_PLAINTEXT_READ")
     assert crypto.unseal_json(crypto.seal_json({"a": "ب"})) == {"a": "ب"} and "enc" in crypto.seal_json({"a": 1})
     time.sleep(0.02)
     key_file.write_text(new + "\n" + old + "\n")                                         # rotate: new on top, old kept

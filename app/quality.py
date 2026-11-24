@@ -67,23 +67,45 @@ class Quality:
                 "issues": list(self.issues), "doubts": list(self.doubts)}
 
 
+def open_reduced(raw: bytes, mode: str, work_side: int):
+    """Open an upload at about its working size without holding it full size: a JPEG is decoded at a reduced scale (draft),
+    any other image is reduced right after decoding, and transparency is laid on white AFTER the reduction, so the extra
+    buffers are working-size. Returns (image in `mode`, its long side at most work_side; (width, height) as uploaded,
+    upright)."""
+    from PIL import Image, ImageOps
+    img = Image.open(io.BytesIO(raw))
+    width, height = img.size
+    try:
+        if img.getexif().get(0x0112) in (5, 6, 7, 8):          # rotated a quarter turn: upright width and height swap
+            width, height = height, width
+    except Exception:  # noqa: BLE001 - no usable EXIF
+        pass
+    see_through = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+    if img.format == "JPEG":
+        img.draft("RGB" if mode == "RGB" else "L", (2 * work_side, 2 * work_side))   # still at least twice the working size
+    img = ImageOps.exif_transpose(img)
+    scale = work_side / max(img.size)
+    if see_through:
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    if scale < 1:
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
+    if see_through:                                             # transparent parts are white paper, not black
+        img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img)
+    return img.convert(mode), (width, height)
+
+
 def measure(raw: bytes) -> Quality:
     """The measures and what they say. Never raises for an image that opens; an image that does not open has no issues here
     (the upload checks report that)."""
     try:
         import cv2
         import numpy as np
-        from PIL import Image, ImageOps
-        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
-        if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:       # transparent parts are white paper, not black
-            img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img.convert("RGBA"))
-        img = img.convert("L")
+        img, (width, height) = open_reduced(raw, "L", WORK_SIDE)
     except Exception:  # noqa: BLE001 - not this module's failure to report
         return Quality()
-    q = Quality(width=img.width, height=img.height)
-    scale = WORK_SIDE / max(img.size)
-    if scale < 1:
-        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
+    q = Quality(width=width, height=height)
     grey = np.asarray(img, dtype=np.uint8)
     q.sharpness = float(cv2.Laplacian(grey, cv2.CV_64F).var())
     q.brightness = float(grey.mean())

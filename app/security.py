@@ -126,7 +126,8 @@ def authenticate(request: Request) -> str:
     try:
         limiter.check("badkey:" + client, limit=config.bad_key_limit_per_minute())
     except HTTPException:
-        audit.event("auth_throttled", client=client, path=path)
+        if audit.first_in_window("auth_throttled:" + client):   # once per client per minute, not once per request
+            audit.event("auth_throttled", client=client, path=path)
         raise
     audit.event("auth_failed", client=client, path=path, key_sent=bool(key))
     raise HTTPException(401, {"code": "unauthorized", "message": "A valid API key is required"},
@@ -201,8 +202,40 @@ def add_security_headers(response, path: str) -> None:
         response.headers.setdefault("Content-Security-Policy", UI_CSP)
 
 
+def refuse_before_body(scope) -> tuple[int, dict, dict] | None:
+    """For a request that carries a body: (status, detail, headers) when its API key is missing or unknown, so the body is
+    never read or parsed for a caller without a key. Refusals are throttled and recorded exactly as authenticate() does. A
+    known key (also an expired one, which authenticate() answers) returns None and the request goes on."""
+    from starlette.requests import Request as _Request  # noqa: WPS433
+    keys = _keys()
+    if not keys:
+        return None
+    request = _Request(scope)
+    key = request.headers.get("X-API-Key", "")
+    auth = request.headers.get("Authorization", "")
+    if not key and auth.lower().startswith("bearer "):
+        key = auth[7:].strip()
+    given = hashlib.sha256(key.encode()).hexdigest()
+    known = False
+    for k in keys:                                   # every entry is compared, as in authenticate()
+        known = hmac.compare_digest(given, k["digest"]) or known
+    if known:
+        return None
+    client = client_id(request, "anonymous")
+    path = request.url.path
+    try:
+        limiter.check("badkey:" + client, limit=config.bad_key_limit_per_minute())
+    except HTTPException as exc:
+        if audit.first_in_window("auth_throttled:" + client):
+            audit.event("auth_throttled", client=client, path=path)
+        return exc.status_code, exc.detail, dict(exc.headers or {})
+    audit.event("auth_failed", client=client, path=path, key_sent=bool(key))
+    return 401, {"code": "unauthorized", "message": "A valid API key is required"}, {"WWW-Authenticate": "ApiKey"}
+
+
 class BodyLimit:
-    """Pure ASGI guard: reject an oversized request body before the framework buffers it (and before auth runs)."""
+    """Pure ASGI guard: reject an oversized request body before the framework buffers it (and before auth runs), and refuse
+    a request with a body and no valid API key before any of the body is read."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -214,6 +247,18 @@ class BodyLimit:
         declared = dict(scope.get("headers") or []).get(b"content-length")
         if declared and declared.isdigit() and int(declared) > limit:
             return await self._reject(send)
+        if scope.get("method") in ("POST", "PUT", "PATCH"):
+            refused = refuse_before_body(scope)
+            if refused is not None:
+                import json as _json  # noqa: WPS433
+                status, detail, headers = refused
+                body = _json.dumps({"detail": detail}).encode()
+                await send({"type": "http.response.start", "status": status,
+                            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
+                                        (b"connection", b"close")]
+                            + [(k.lower().encode(), str(v).encode()) for k, v in headers.items()]})
+                await send({"type": "http.response.body", "body": body})
+                return
         seen = 0
         started = False
         exceeded = False

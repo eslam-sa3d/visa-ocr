@@ -11,6 +11,12 @@ half of one. Writers take a lock file, so the retraining timer and an operator c
 Optional signature: set MANIFEST_HMAC_KEY (or MANIFEST_HMAC_KEY_FILE) on the hosts that register models and on the hosts that
 serve. The manifest then carries an HMAC-SHA256 over its model list, and a manifest whose signature is missing or wrong is
 refused. Someone who can write the models folder but does not hold the key cannot swap a model and its checksum.
+
+The signed data includes a serial number that every save increases. A server remembers the highest serial it has accepted
+for each manifest (in memory, and in MANIFEST_STATE_FILE when that is set: put it on the data volume, outside the models
+folder) and refuses an older manifest put back in place, so an earlier signed state (with a model since replaced) cannot be
+restored by someone without the key. With the key set, SHA256SUMS in models/tessdata must carry SHA256SUMS.sig (written by
+tools/make_checksums.py), so the Tesseract MRZ model is under the same key.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -43,9 +50,69 @@ def _hmac_key() -> bytes | None:
     return key.encode() if key else None
 
 
-def _signature(models: list[dict], key: bytes) -> str:
-    canonical = json.dumps(models, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+def _signature(models: list[dict], key: bytes, serial: int | None = None) -> str:
+    body = models if serial is None else {"models": models, "serial": serial}      # None: manifests written before serials
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
     return hmac.new(key, canonical, hashlib.sha256).hexdigest()
+
+
+def sign_bytes(data: bytes) -> str | None:
+    """HMAC-SHA256 of a file's bytes with the manifest key, or None when no key is set."""
+    key = _hmac_key()
+    return hmac.new(key, data, hashlib.sha256).hexdigest() if key else None
+
+
+def signed_file_ok(path: Path) -> bool:
+    """With a manifest key set: the file's '<name>.sig' holds its HMAC. Without a key there is nothing to check."""
+    key = _hmac_key()
+    if key is None:
+        return True
+    try:
+        data = Path(path).read_bytes()
+        sig = Path(str(path) + ".sig").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return hmac.compare_digest(sig, hmac.new(key, data, hashlib.sha256).hexdigest())
+
+
+_HIGHEST: dict[str, int] = {}          # manifest path -> highest serial accepted by this process
+
+
+def _state_file() -> Path | None:
+    p = os.environ.get("MANIFEST_STATE_FILE", "").strip()
+    return Path(p) if p else None
+
+
+def _highest_seen(manifest: Path) -> int:
+    key = str(manifest.resolve())
+    best = _HIGHEST.get(key, -1)
+    sf = _state_file()
+    if sf is not None:
+        try:
+            best = max(best, int(json.loads(sf.read_text(encoding="utf-8")).get(key, -1)))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    return best
+
+
+def _remember(manifest: Path, serial: int) -> None:
+    key = str(manifest.resolve())
+    if serial <= _HIGHEST.get(key, -1):
+        return
+    _HIGHEST[key] = serial
+    sf = _state_file()
+    if sf is None:
+        return
+    try:
+        state = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}
+        if int(state.get(key, -1)) >= serial:
+            return
+        state[key] = serial
+        tmp = sf.with_name(sf.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, sf)
+    except (OSError, ValueError, TypeError):
+        pass
 
 
 _DESKTOP_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}      # written by file managers when a folder is opened; not model files
@@ -98,6 +165,7 @@ class ModelInfo:
 
 
 _KNOWN = {f.name for f in fields(ModelInfo)}
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 
 
 class Registry:
@@ -111,10 +179,24 @@ class Registry:
         try:
             data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             raw = data.get("models", [])
+            serial = data.get("serial")
+            if serial is not None and (not isinstance(serial, int) or isinstance(serial, bool) or serial < 0):
+                raise ManifestError("the manifest serial is not a whole number")
             key = _hmac_key()
-            if key is not None and not hmac.compare_digest(str(data.get("signature", "")), _signature(raw, key)):
-                raise ManifestError("the manifest signature is missing or wrong")
-            return [ModelInfo(**{k: v for k, v in m.items() if k in _KNOWN}) for m in raw]
+            if key is not None:
+                if not hmac.compare_digest(str(data.get("signature", "")), _signature(raw, key, serial)):
+                    raise ManifestError("the manifest signature is missing or wrong")
+                seen = _highest_seen(self.manifest_path)
+                if (serial or 0) < seen:
+                    raise ManifestError(f"an older manifest was put back (serial {serial or 0}; {seen} was accepted before)")
+                _remember(self.manifest_path, serial or 0)
+            out = [ModelInfo(**{k: v for k, v in m.items() if k in _KNOWN}) for m in raw]
+            for m in out:
+                # ids name folders and files on the training host (checkpoints, metrics): letters, digits, '.', '_' and '-'
+                # only, so an id can never point outside the folder it is used in
+                if not isinstance(m.id, str) or not _ID.fullmatch(m.id) or ".." in m.id:
+                    raise ManifestError(f"a model id is not allowed: {str(m.id)[:60]!r}")
+            return out
         except ManifestError:
             raise
         except (OSError, ValueError, TypeError, AttributeError) as exc:
@@ -123,10 +205,15 @@ class Registry:
     def save(self, models: list[ModelInfo]) -> None:
         self.base.mkdir(parents=True, exist_ok=True)
         raw = [asdict(m) for m in models]
-        payload: dict = {"models": raw}
+        serial = 0
+        try:
+            serial = int(json.loads(self.manifest_path.read_text(encoding="utf-8")).get("serial") or 0) + 1
+        except (OSError, ValueError, TypeError, AttributeError):
+            serial = 1
+        payload: dict = {"serial": serial, "models": raw}
         key = _hmac_key()
         if key is not None:
-            payload["signature"] = _signature(raw, key)
+            payload["signature"] = _signature(raw, key, serial)
         text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         tmp = self.manifest_path.with_name(f"manifest.json.{os.getpid()}.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:

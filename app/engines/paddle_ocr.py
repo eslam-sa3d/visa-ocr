@@ -304,10 +304,17 @@ class PaddleOcrEngine:
                 self._smoke(reader)
         except Exception as exc:  # noqa: BLE001 - whatever went wrong, keep serving with the models already loaded
             log.error("model switch refused; keeping the models in use: %s: %s", type(exc).__name__, exc)
+            from .. import audit  # noqa: WPS433
+            audit.event("model_switch_refused", reason=type(exc).__name__,
+                        models_in_use=[f"{k}={v.get('id')}" for k, v in sorted((self._used_models or {}).items())])
             self._stamp = stamp                               # do not retry on every request; the next manifest change will
             return
+        before = [f"{k}={v.get('id')}" for k, v in sorted((self._used_models or {}).items())]
         self._readers, self._used_models, self._stamp = fresh, used, stamp
         log.info("model switch done: %s", ", ".join(f"{k}={v['id']}" for k, v in sorted(used.items())))
+        from .. import audit  # noqa: WPS433
+        audit.event("model_switched", models_before=before,
+                    models_now=[f"{k}={v.get('id')}" for k, v in sorted(used.items())])
 
     @staticmethod
     def _smoke(reader) -> None:

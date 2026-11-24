@@ -9,7 +9,6 @@ The face is found with the detector that ships inside OpenCV (no model file to f
 """
 from __future__ import annotations
 
-import io
 import math
 import os
 import threading
@@ -90,15 +89,11 @@ def check(raw: bytes) -> dict:
     try:
         import cv2
         import numpy as np
-        from PIL import Image, ImageOps
-        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
-        if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-            img = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img.convert("RGBA"))
-        img = img.convert("RGB")
+        from .quality import open_reduced
+        img, (width, height) = open_reduced(raw, "RGB", 900)      # decoded at the working size, not full size
     except Exception:  # noqa: BLE001 - whatever stops the picture from opening, the applicant's answer is the same
         return _verdict(["unreadable"], [], {})
     t = config.photo_thresholds()
-    width, height = img.size
     measures: dict = {"width": width, "height": height}
     issues: list[str] = []
     doubts: list[str] = []
@@ -106,9 +101,6 @@ def check(raw: bytes) -> dict:
         issues.append("too_small")
     if not t["shape_min"] <= width / height <= t["shape_max"]:
         issues.append("wrong_shape")
-    scale = min(1.0, 900 / max(width, height))                 # every measure is taken at one working size
-    if scale < 1:
-        img = img.resize((max(1, round(width * scale)), max(1, round(height * scale))), Image.LANCZOS)
     rgb = np.asarray(img, dtype=np.uint8)
     grey = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     h, w = grey.shape

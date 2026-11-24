@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 from app import audit, config, crypto, main, security  # noqa: E402
 from app.training_store import TrainingStore  # noqa: E402
 from tests.test_model_and_training import MRZ, FixedEngine as _Fixed, png_bytes  # noqa: E402
+from tests.approval import approve
 
 KEYS = {"portal": "p" * 40, "reviewer": "r" * 40, "admin": "a" * 40, "old": "o" * 40}
 
@@ -89,7 +90,7 @@ def test_security_log_records_actions_without_document_values(roles, tmp_path):
             "lines": [{"image": 0, "box": [1, 2, 300, 40], "text": MRZ[0], "lang": "en"}]}
     assert client.post(f"/v1/jobs/{job}/corrections", json=body, headers=h("reviewer")).status_code == 201
     assert client.post(f"/v1/jobs/{job}/corrections", json=body, headers=h("portal")).status_code == 403
-    main.training.decide(job, "omar")
+    approve(main.training, job, "omar")
     main.training.remove(job, tombstone=True)
     got = events(log)
     by = {e["event"]: e for e in got}
@@ -100,7 +101,7 @@ def test_security_log_records_actions_without_document_values(roles, tmp_path):
     text = log.read_text()
     assert "SECRET" not in text and MRZ[0] not in text and KEYS["portal"] not in text and "ERIKSSON" not in text
     assert oct(log.stat().st_mode & 0o777) == "0o600"
-    assert audit.event("x", nested={"a": 1}, ok="y", n=3, tags=["a", "b"]) .keys() == {"ts", "event", "ok", "n", "tags"}
+    assert audit.event("x", nested={"a": 1}, ok="y", n=3, tags=["a", "b"]) .keys() == {"ts", "event", "os_user", "ok", "n", "tags"}
 
 
 def test_model_changes_are_recorded(tmp_path, monkeypatch):
