@@ -171,3 +171,40 @@ def test_passport_endpoint_runs_a_passport_only_job(monkeypatch):
     assert job["status"] == "failed" and job["error"]["code"] == "not_a_passport"
     r = client.post("/v1/documents/extract", files=[("files", ("p.png", _page(), "image/png"))])
     assert client.get("/v1/jobs/" + r.json()["jobId"]).json()["status"] == "done"      # a visa is still read by the general endpoint
+
+
+CARD = ["KINGDOM OF BAHRAIN", "IDENTITY CARD", "Name: Sample Person", "Nationality: Egypt", "Date of Birth: 05/03/1990",
+        "Expiry Date: 11/06/2030", "المهنة مهندس برمجيات"]
+
+
+class _CardReader(_Reader):
+    def extract(self, images, hint):
+        assert hint == "gcc_id"                      # the readers are told "card with no MRZ", never the endpoint's own word
+        return super().extract(images, hint)
+
+
+def test_card_only_reads_a_card_front_and_turns_back_everything_else():
+    status, res = pipeline.run([_page()], pipeline.CARD_TEXT, Applicant(), _CardReader(None, CARD))
+    assert status == "done" and res["document"]["format"] == "visual" and res["needsReview"]
+    for lines in (PASSPORT, VISA):                   # a page with an MRZ is not what this endpoint reads
+        status, res = pipeline.run([_page()], pipeline.CARD_TEXT, Applicant(), _CardReader(lines))
+        assert status == "failed" and res["code"] == "not_a_card" and res["retake"]["recommended"]
+    status, res = pipeline.run([_page()], pipeline.CARD_TEXT, Applicant(), _CardReader(None, ["PASSPORT", "Surname", "SAMPLE"]))
+    assert status == "failed" and res["code"] == "not_a_card"          # a passport page whose MRZ did not show
+    status, res = pipeline.run([_page()], pipeline.CARD_TEXT, Applicant(), _CardReader(None, ["hello", "world"]))
+    assert status == "failed" and res["code"] == "card_not_found" and "front of the card" in res["retake"]["message"]
+
+
+def test_card_endpoint_runs_a_card_only_job(monkeypatch):
+    from fastapi.testclient import TestClient
+    import app.main as main
+    monkeypatch.setattr(main, "get_engine", lambda: _CardReader(None, CARD))
+    client = TestClient(main.app)
+    r = client.post("/v1/cards/extract", files=[("files", ("c.png", _page(), "image/png"))])
+    assert r.status_code == 202
+    job = client.get("/v1/jobs/" + r.json()["jobId"]).json()
+    assert job["status"] == "done" and job["result"]["document"]["format"] == "visual"
+    monkeypatch.setattr(main, "get_engine", lambda: _CardReader(PASSPORT))
+    r = client.post("/v1/cards/extract", files=[("files", ("c.png", _page(), "image/png"))])
+    job = client.get("/v1/jobs/" + r.json()["jobId"]).json()
+    assert job["status"] == "failed" and job["error"]["code"] == "not_a_card"

@@ -230,6 +230,7 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
 
 
 PASSPORT_MRZ = "passport_mrz"       # the passport-only endpoint's job: read the MRZ of a passport and nothing else
+CARD_TEXT = "card_text"             # the card-only endpoint's job: read the printed front of a card that has no MRZ
 
 
 def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
@@ -239,6 +240,11 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
         passport_only = hint == PASSPORT_MRZ
         if passport_only:
             hint = "passport"
+        # Card-only jobs: the printed front of a Gulf ID or a residence card. No MRZ is searched for, and a page that shows
+        # one (a passport, a visa, the back of a card) is turned back.
+        card_only = hint == CARD_TEXT
+        if card_only:
+            hint = "gcc_id"
         images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
         # A photo that is plainly unusable (black, blank, badly blurred, tiny) is turned back at once with what to do about
         # it. Reading it would only take longer to reach the same answer.
@@ -263,6 +269,9 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             log.info("lines shaped like an MRZ were not one (no document type letter or dates); treated as no MRZ")
             output.mrz_lines, mrz_confidence = None, None
 
+        if card_only and output.mrz_lines:
+            return "failed", {"code": "not_a_card", "message": quality.MESSAGES["not_a_card"],
+                              "retake": quality.retake(["not_a_card"])}
         if isinstance(output.fields, dict) and output.fields.get("mrzCutOff") and not (output.mrz_lines and check_score(output.mrz_lines)[1]):
             # The MRZ runs out of the photo. Whatever was pieced together from the part that shows is not a reading.
             return "failed", {"code": "mrz_not_found", "message": quality.MESSAGES["mrz_cut_off"],
@@ -315,6 +324,11 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
                     if doc.get(key) == "gregorian":
                         del doc[key]          # the calendar is only stated when it is not the usual one (a Hijri date)
                 return "done", _with_retake(result, clarity)
+        if card_only:
+            # Nothing on the page read as a card. A page that names itself a passport is told so; otherwise another photo.
+            reasons = ["not_a_card"] if text_lines and says_it_is_a_passport(text_lines) else clarity.doubts + ["card_not_found"]
+            code = "not_a_card" if reasons == ["not_a_card"] else "image_unclear" if clarity.doubts else "card_not_found"
+            return "failed", {"code": code, "message": quality.retake_message(reasons), "retake": quality.retake(reasons)}
         if not output.mrz_lines and card_hint:
             output.mrz_lines = _fallback_mrz(images, hint)      # told "card", but no card fields were read: look for an MRZ after all
             mrz_confidence = None

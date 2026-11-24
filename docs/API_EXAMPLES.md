@@ -238,6 +238,22 @@ every kind of document.
 }
 ```
 
+### Cards only: read the printed front of a card with no MRZ
+
+`POST /v1/cards/extract` takes the same upload as `POST /v1/documents/extract` and answers the same way (HTTP 202 with a
+`jobId`, then `GET /v1/jobs/{id}`), in the same result shape. It reads the printed front of a Gulf ID card or of a European,
+UK or US residence card, and does not look for an MRZ, so a card is read sooner than on the endpoint for all documents.
+Printed text carries no check digit: every card read here has `needsReview: true`.
+
+| What is uploaded | Job result |
+|---|---|
+| The front of a Gulf ID or residence card | `done`, the card's fields, `needsReview: true` |
+| A passport, a visa, or the MRZ side of a card | `failed`, code `not_a_card` |
+| Anything no card can be read from | `failed`, code `card_not_found` (or `image_unclear`) |
+
+A visa, and an ID card photographed on its MRZ side, belong to neither this endpoint nor the passport one: send them to
+`POST /v1/documents/extract`.
+
 ### Check the applicant's personal photo
 
 `POST /v1/photos/check` with one image in the `file` field answers at once (well under a second) whether the photo can be

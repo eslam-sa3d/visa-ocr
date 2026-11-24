@@ -156,12 +156,13 @@ run are in `TEST_REPORT.md`.
 
 Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in the portal.
 
-### The three upload endpoints
+### The four upload endpoints
 
 | Endpoint | For | Answer |
 |---|---|---|
 | `POST /v1/documents/extract` | Every kind of document: passports, visas, ID cards, Gulf cards, residence-card fronts | A job; the result when it is read |
 | `POST /v1/passports/extract` | Passports only, MRZ only. Anything else is turned back (`not_a_passport`, `mrz_not_found`) | A job, same result shape |
+| `POST /v1/cards/extract` | Cards with no MRZ only: the printed front of a Gulf ID or of a European, UK or US residence card. No MRZ is searched for. Anything else is turned back (`not_a_card`, `card_not_found`). Always for a person to confirm | A job, same result shape |
 | `POST /v1/photos/check` | The applicant's personal photo: one face, large enough, centred, sharp, well lit, light plain background | At once, `acceptable` true or false with the reasons |
 
 Examples of each are in `docs/API_EXAMPLES.md`.

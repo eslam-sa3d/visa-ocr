@@ -377,6 +377,28 @@ async def extract_passport(
                          expected_given_names, expected_document_number, expected_birth_date, expected_expiry_date, owner)
 
 
+@app.post("/v1/cards/extract", status_code=202)
+async def extract_card(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    consent_training: bool = Form(False),
+    expected_nationality: str | None = Form(None, max_length=3),
+    expected_surname: str | None = Form(None, max_length=100),
+    expected_given_names: str | None = Form(None, max_length=100),
+    expected_document_number: str | None = Form(None, max_length=30),
+    expected_birth_date: str | None = Form(None, max_length=10),
+    expected_expiry_date: str | None = Form(None, max_length=10),
+    owner: str = Depends(security.authenticate),
+) -> dict:
+    """Cards with no MRZ only: the printed front of a Gulf ID or of a European, UK or US residence card. The upload is
+    taken in and read like any other (same checks, same job, same result shape), and no MRZ is searched for, which makes it
+    the quickest way to read a card. A passport, a visa or the MRZ side of a card comes back failed, with a message for the
+    applicant. Nothing printed carries a check digit, so every card read here is for a person to confirm.
+    POST /v1/documents/extract stays the endpoint for every kind of document."""
+    return await extract(request, files, pipeline.CARD_TEXT, consent_training, expected_nationality, expected_surname,
+                         expected_given_names, expected_document_number, expected_birth_date, expected_expiry_date, owner)
+
+
 @app.post("/v1/photos/check")
 async def check_photo(request: Request, file: UploadFile = File(...), owner: str = Depends(security.authenticate)) -> dict:
     """Is this personal photo usable for the application? Answers at once from the picture alone: one face, large enough,

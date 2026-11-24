@@ -77,7 +77,7 @@ def main() -> int:
     ap.add_argument("--images", type=Path, required=True)
     ap.add_argument("--levels", default="1,4,16,64")
     ap.add_argument("--uploads", type=int, default=6)
-    ap.add_argument("--endpoint", default="/v1/documents/extract", help="or /v1/passports/extract")
+    ap.add_argument("--endpoint", default="/v1/documents/extract", help="or /v1/passports/extract, /v1/cards/extract")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--insecure", action="store_true")
     ap.add_argument("--json", type=Path)

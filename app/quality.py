@@ -33,6 +33,10 @@ MESSAGES = {
                     "photo, the printed details and the two long lines of letters and '<' at the bottom.",
     "not_a_passport": "This is not the photo page of a passport. Take a photo of the passport page that shows your photo and "
                       "has two long lines of letters and '<' at the bottom.",
+    "not_a_card": "This photo shows a passport, a visa or the back of a card. Take a photo of the front of your ID or residence "
+                  "card: the side with your photo and printed details.",
+    "card_not_found": "No ID or residence card could be read from this photo. Take the photo again with the whole front of the "
+                      "card flat, in focus and in good light, filling the frame.",
     "mrz_cut_off": "The two long lines of letters and '<' at the bottom of the document are not fully inside the photo. Take "
                    "the photo again from a little further away, with both lines complete from the first character to the last.",
     "too_small": "The image is too small to read. Move closer so the document fills the frame, and take the photo again.",
