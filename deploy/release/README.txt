@@ -30,7 +30,8 @@ keys from a key file, an encryption key for stored data and your organisation's 
 
 What is inside
   Readers: PaddleOCR (English, Arabic), Tesseract with the project's own OCR-B model for MRZ print, RapidOCR.
-  Endpoints: POST /v1/documents/extract, GET /v1/jobs/{id}, POST /v1/documents/check, POST /v1/mrz/parse,
+  Endpoints: POST /v1/documents/extract (all documents), POST /v1/passports/extract (passport MRZ only),
+             POST /v1/photos/check (personal photo), GET /v1/jobs/{id}, POST /v1/documents/check, POST /v1/mrz/parse,
              POST /v1/jobs/{id}/corrections, GET /v1/models.
 
 Known limits

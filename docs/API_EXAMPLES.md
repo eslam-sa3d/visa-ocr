@@ -210,6 +210,65 @@ Unusable photo with `UPLOAD_CLARITY_CHECK=0`, or a photo that could not be read 
 
 `acceptable: false` means the extract call would turn this photo back: ask for another one. `acceptable: true` with `clear: false` is a soft photo that may still read. This check sees the whole photo only: glare over a few MRZ characters or a cut-off MRZ passes here and is caught by the reading, so always handle `retake` in the job result too.
 
+### Passports only: read the MRZ of a passport
+
+`POST /v1/passports/extract` takes the same upload as `POST /v1/documents/extract` (the `files` field, the optional
+`expected_*` fields and `consent_training`) and answers the same way: HTTP 202 with a `jobId`, then `GET /v1/jobs/{id}` for
+the result, in the same shape. It differs in one thing: it accepts nothing but the machine-readable zone of a passport.
+
+| What is uploaded | Job result |
+|---|---|
+| A passport page with its MRZ | `done`, the passport's fields and check digits |
+| A visa, an ID card or a residence permit with an MRZ | `failed`, code `not_a_passport` |
+| A card front or any page with no MRZ | `failed`, code `mrz_not_found` (or `image_unclear`) |
+| Two documents in one photo | `failed`, code `multiple_documents` |
+
+Every failure carries `error.retake.message` for the applicant. `POST /v1/documents/extract` is unchanged and still reads
+every kind of document.
+
+```json
+{
+  "status": "failed",
+  "result": null,
+  "error": {
+    "code": "not_a_passport",
+    "message": "This is not the photo page of a passport. Take a photo of the passport page that shows your photo and has two long lines of letters and '<' at the bottom.",
+    "retake": {"recommended": true, "reasons": ["not_a_passport"], "message": "This is not the photo page of a passport. Take a photo of the passport page that shows your photo and has two long lines of letters and '<' at the bottom."}
+  }
+}
+```
+
+### Check the applicant's personal photo
+
+`POST /v1/photos/check` with one image in the `file` field answers at once (well under a second) whether the photo can be
+used. Nothing is stored or queued, and the face is not compared with anything: the check says whether the photo meets the
+rules, not whose face it shows.
+
+```json
+{
+  "acceptable": false,
+  "issues": ["background_not_plain"],
+  "doubts": [],
+  "measures": {"width": 600, "height": 750, "faces": 1, "faceHeight": 0.24, "faceCentre": 0.39, "faceSharpness": 54.8, "faceBrightness": 155.6, "backgroundBrightness": 176.0, "backgroundSpread": 44.2, "eyes": 2, "tiltDegrees": 3.7},
+  "messages": ["The background is not plain. Stand in front of a plain white or light wall, with nothing behind you, and take the photo again."],
+  "retake": {"recommended": true, "reasons": ["background_not_plain"], "message": "The background is not plain. Stand in front of a plain white or light wall, with nothing behind you, and take the photo again."}
+}
+```
+
+`acceptable: false` means refuse the photo and show `retake.message`. `issues` refuse the photo; `doubts` do not.
+
+| Code | Kind | Meaning |
+|---|---|---|
+| `unreadable`, `too_small`, `wrong_shape` | issue | The file does not open, is under 300 pixels on its short side, or is not a portrait (taller than wide, up to square) |
+| `no_face`, `several_faces` | issue | No face seen from the front, or more than one |
+| `face_cut_off`, `face_too_small`, `face_too_close`, `not_centred` | issue | The face touches the edge, is under 20% or over 72% of the photo's height, or is far from the middle |
+| `blurred`, `too_dark`, `too_bright` | issue | The face is out of focus, dark, or washed out |
+| `background_not_light`, `background_not_plain` | issue | The background is dark, or has objects or patterns in it |
+| `eyes_not_clear`, `head_tilted`, `not_colour` | doubt | Both eyes were not found (glasses, hair, closed eyes), the head slopes more than 12 degrees, or the photo is black and white |
+
+Every limit can be set (`PHOTO_MIN_SIDE`, `PHOTO_FACE_MIN`, `PHOTO_BACKGROUND_LIGHT` and so on; see `photo_thresholds` in
+`app/config.py`). HTTP 503 with code `photo_check_unavailable` means the face detector is missing on that host.
+
 Rejected upload (HTTP 415):
 
 ```json

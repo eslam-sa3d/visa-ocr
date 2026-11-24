@@ -48,8 +48,10 @@ def upload(image):
     body = (f"--{b}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"s.png\"\r\nContent-Type: image/png\r\n\r\n").encode() + image + f"\r\n--{b}--\r\n".encode()
     return body, {"Content-Type": f"multipart/form-data; boundary={b}"}
 def read(image):
+    return read_at("/v1/documents/extract", image)
+def read_at(path, image):
     body, h = upload(image)
-    status, j = call("/v1/documents/extract", body, {**h, **key})
+    status, j = call(path, body, {**h, **key})
     if status == 422 and (j.get("detail") or {}).get("code") == "image_unclear":
         return {"status": "failed", "error": j["detail"], "refusedAtUpload": True}     # refused at once, no job
     assert status == 202, f"upload gave {status}"
@@ -71,10 +73,15 @@ rows = sqlite3.connect("/data/jobs.db").execute("select * from jobs").fetchall()
 sealed = any(str(c).startswith("VOENC") for r in rows for c in r)
 plain = any((done.get("result") or {}).get("document", {}).get("documentNumber", "\0") in str(c) for r in rows for c in r)
 audit = sum(1 for _ in open("/var/log/visa-ocr/audit.log"))
+pb = uuid.uuid4().hex                           # personal-photo check: the face detector must be inside the image
+pbody = (f"--{pb}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"me.png\"\r\nContent-Type: image/png\r\n\r\n").encode() + blank.getvalue() + f"\r\n--{pb}--\r\n".encode()
+pstatus, pverdict = call("/v1/photos/check", pbody, {"Content-Type": f"multipart/form-data; boundary={pb}", **key})
+photo_ok = pstatus == 200 and pverdict.get("acceptable") is False and "no_face" in (pverdict.get("issues") or [])
+pjob = read_at("/v1/passports/extract", sample)   # passport-only endpoint reads the sample passport
 readers = call("/readyz")[1].get("readers")
-print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| blank photo:", (turned_back.get("error") or {}).get("code"),
+print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| passport endpoint:", pjob.get("status"), "| photo check:", "ok" if photo_ok else f"FAILED ({pstatus})", "| blank photo:", (turned_back.get("error") or {}).get("code"),
       "| retake message:", bool(retake), "| stored encrypted:", sealed and not plain, "| audit lines:", audit)
-ok = readers == 2 and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
+ok = readers == 2 and photo_ok and pjob.get("status") == "done" and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
 raise SystemExit(0 if ok else "FAIL: see the line above")
 PY
 )"

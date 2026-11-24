@@ -52,6 +52,14 @@
     <input id="file" type="file" accept="image/jpeg,image/png" hidden>
     <div id="thumbs"></div>
     <div class="row">
+      <label for="mode">Check</label>
+      <select id="mode">
+        <option value="/v1/documents/extract">Any document</option>
+        <option value="/v1/passports/extract">Passport only (MRZ)</option>
+        <option value="/v1/photos/check">Personal photo</option>
+      </select>
+    </div>
+    <div class="row">
       <label for="hint">Document type</label>
       <select id="hint">
         <option value="">Not sure</option>
@@ -144,7 +152,7 @@ function errText(body) {
 function showError(message, code) {
   $("#result").hidden = false;
   const out = $("#out"); out.replaceChildren();
-  out.append(el("div", { className: "banner review" }, code === "image_unclear" || code === "mrz_not_found" || code === "multiple_documents" ? "Please take the photo again" : "Could not read the document"));
+  out.append(el("div", { className: "banner review" }, code === "image_unclear" || code === "mrz_not_found" || code === "multiple_documents" || code === "not_a_passport" ? "Please take the photo again" : "Could not read the document"));
   out.append(el("p", {}, message));
   const tips = { unauthorized: "Enter a valid API key above.", rate_limited: "Too many requests; wait a moment.", busy: "The service is busy; try again shortly.",
     invalid_image: "The file is not a readable image.", type_mismatch: "The file content does not match its type.",
@@ -228,6 +236,20 @@ function showCorrections(jobId, res) {
 $("#go").addEventListener("click", async () => {
   $("#go").disabled = true; $("#status").textContent = "Uploading…";
   try {
+    const mode = $("#mode").value;
+    if (mode === "/v1/photos/check") {             // the personal photo: answered at once, no job
+      const pf = new FormData(); pf.append("file", files[0]);
+      const pr = await fetch(mode, { method: "POST", body: pf, headers: hdr() });
+      const pv = await pr.json();
+      if (!pr.ok) { showError(errText(pv), pv.detail && pv.detail.code); return; }
+      $("#result").hidden = false;
+      const out = $("#out"); out.replaceChildren();
+      out.append(el("div", { className: "banner " + (pv.acceptable ? "ok" : "review") }, pv.acceptable ? "Photo accepted" : "Please take the photo again"));
+      pv.messages.forEach((m) => out.append(el("p", {}, m)));
+      if (pv.doubts.length && pv.acceptable) out.append(el("p", { style: "color:#555" }, "Accepted with remarks: " + pv.doubts.join(", ")));
+      out.append(el("p", { style: "margin:.3rem 0;color:#555;font-size:.85rem" }, Object.entries(pv.measures).map(([k, v]) => k + " " + v).join(", ")));
+      return;
+    }
     const fd = new FormData(); files.forEach((f) => fd.append("files", f));
     if ($("#hint").value) fd.append("doc_type_hint", $("#hint").value);
     if ($("#nat").value.trim()) fd.append("expected_nationality", $("#nat").value.trim());
@@ -235,7 +257,7 @@ $("#go").addEventListener("click", async () => {
     if (consented) fd.append("consent_training", "true");
     [["a_surname", "expected_surname"], ["a_given", "expected_given_names"], ["a_docno", "expected_document_number"],
      ["a_birth", "expected_birth_date"], ["a_expiry", "expected_expiry_date"]].forEach(([id, name]) => { if ($("#" + id).value.trim()) fd.append(name, $("#" + id).value.trim()); });
-    const r = await fetch("/v1/documents/extract", { method: "POST", body: fd, headers: hdr() });
+    const r = await fetch(mode, { method: "POST", body: fd, headers: hdr() });
     const body = await r.json();
     if (!r.ok) { showError(errText(body), body.detail && body.detail.code); return; }
     $("#status").textContent = "Reading…";

@@ -91,6 +91,10 @@ FOR THE PORTAL TEAM
       photo (flag page_cut_off: the reading is returned, a person reviews it, the applicant is asked for the whole page).
   A reading whose check digits all pass carries it only when the passport page is cut off.
   POST /v1/documents/check answers at once whether a photo is clear enough, before it is sent for reading.
+  POST /v1/passports/extract is the passport-only endpoint: same upload and same result as /v1/documents/extract, but
+  only the MRZ of a passport is accepted (anything else fails with not_a_passport or mrz_not_found and a retake message).
+  POST /v1/photos/check checks the applicant's personal photo at once: one face, large enough, centred, sharp, well lit,
+  on a light plain background. Refuse the photo when "acceptable" is false and show retake.message.
   Send the applicant's form data with each upload: it confirms the name and nationality, which no check digit covers.
   Examples: docs/API_EXAMPLES.md in docs.tar.gz.
 

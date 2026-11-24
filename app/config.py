@@ -93,6 +93,20 @@ def paddle_one_language_score() -> float: return min(1.0, max(0.0, _float("PADDL
 # A passport photo with less page above the MRZ than this many times the height of the MRZ itself is taken as cut off
 # (a whole page has about six times). 0 = no check.
 def page_cut_off_ratio() -> float: return max(0.0, _float("PAGE_CUT_OFF_RATIO", 3.0))
+def photo_thresholds() -> dict:
+    """Limits of the personal-photo check; each can be set as PHOTO_<NAME> (for example PHOTO_MIN_SIDE=600)."""
+    d = {"min_side": 300,            # pixels on the shorter side
+         "shape_min": 0.6, "shape_max": 1.05,     # width / height: a portrait, up to square
+         "face_min": 0.2, "face_max": 0.72,       # height of the face (forehead to chin) as a share of the photo's height
+         "centre": 0.2,              # how far the middle of the face may be from the middle of the photo (share of width)
+         "sharpness": 25.0,          # fine detail in the face; lower is blurred
+         "dark": 70.0, "bright": 225.0,           # mean brightness of the face, 0 to 255
+         "background_light": 150.0,  # mean brightness of the background
+         "background_spread": 38.0,  # how uneven the background may be
+         "tilt": 12.0}               # degrees the line through the eyes may slope
+    return {k: _float("PHOTO_" + k.upper(), v) for k, v in d.items()}
+
+
 def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION", True)   # find text once, read it per language; 0 = one pipeline per language
 def ocr_engine() -> str: return os.environ.get("OCR_ENGINE", "auto")
 def ocr_langs() -> list[str]: return [x.strip() for x in os.environ.get("OCR_LANGS", "en,ar").split(",") if x.strip()]

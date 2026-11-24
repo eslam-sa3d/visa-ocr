@@ -189,8 +189,16 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
     return status, result
 
 
+PASSPORT_MRZ = "passport_mrz"       # the passport-only endpoint's job: read the MRZ of a passport and nothing else
+
+
 def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Engine) -> tuple[str, dict]:
     try:
+        # Passport-only jobs: no card front, no residence-card front, no visa. The MRZ of a passport is read and checked;
+        # anything else is turned back.
+        passport_only = hint == PASSPORT_MRZ
+        if passport_only:
+            hint = "passport"
         images = [shrink_for_ocr(b) for b in images]     # no cost when the API already did it
         # A photo that is plainly unusable (black, blank, badly blurred, tiny) is turned back at once with what to do about
         # it. Reading it would only take longer to reach the same answer.
@@ -220,6 +228,11 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             # Two documents in one photo: which one the applicant means cannot be known, and the wrong one could be read.
             return "failed", {"code": "multiple_documents", "message": quality.MESSAGES["multiple_documents"],
                               "retake": quality.retake(["multiple_documents"])}
+        if passport_only and not output.mrz_lines:
+            reasons = clarity.doubts + ["not_found"]
+            return "failed", {"code": "image_unclear" if clarity.doubts else "mrz_not_found",
+                              "message": quality.retake_message(reasons) if clarity.doubts else _no_document_message(hint, bool(text_lines)),
+                              "retake": quality.retake(reasons)}
         if not output.mrz_lines and text_lines:
             # The front of a European, UK or US residence card, or an Omani card: no MRZ and no check digit on that side.
             # Read from its printed labels and always sent to a person. Gulf cards that name another state, or carry Arabic
@@ -269,6 +282,9 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
                               "retake": quality.retake(reasons)}
 
         result = analyse_mrz(output.mrz_lines)
+        if passport_only and (result["document"].get("format") != "TD3" or result["document"].get("kind") != "passport"):
+            return "failed", {"code": "not_a_passport", "message": quality.MESSAGES["not_a_passport"],
+                              "retake": quality.retake(["not_a_passport"])}
         apply_mrz_policy(result, mrz_confidence, text_lines, applicant, mrz_lines=output.mrz_lines,
                          agreed=(output.fields or {}).get("agreedFields"))
         result["engine"], result["fields"] = output.engine, _fields_out(output)

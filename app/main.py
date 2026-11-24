@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import audit, config, crypto, pipeline, readers, security, worker, quality
+from . import audit, config, crypto, photo, pipeline, readers, security, worker, quality
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
@@ -227,7 +227,8 @@ def root() -> dict:
         "health": "/healthz",
         **({"ui": "/ui"} if config.ui_enabled() else {}),
         **({"docs": "/docs"} if _docs else {}),
-        "endpoints": ["POST /v1/documents/extract", "GET /v1/jobs/{id}", "POST /v1/mrz/parse",
+        "endpoints": ["POST /v1/documents/extract", "POST /v1/passports/extract", "POST /v1/documents/check",
+                      "POST /v1/photos/check", "GET /v1/jobs/{id}", "POST /v1/mrz/parse",
                       "POST /v1/jobs/{id}/corrections", "GET /v1/models"],
     }
 
@@ -353,6 +354,44 @@ async def extract(
         raise
     audit.event("job_created", job=job.id, key=owner, images=len(images), consent_training=bool(consent_training and training.enabled))
     return {"jobId": job.id, "status": job.status, "correlationId": job.correlation_id}
+
+
+@app.post("/v1/passports/extract", status_code=202)
+async def extract_passport(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    consent_training: bool = Form(False),
+    expected_nationality: str | None = Form(None, max_length=3),
+    expected_surname: str | None = Form(None, max_length=100),
+    expected_given_names: str | None = Form(None, max_length=100),
+    expected_document_number: str | None = Form(None, max_length=30),
+    expected_birth_date: str | None = Form(None, max_length=10),
+    expected_expiry_date: str | None = Form(None, max_length=10),
+    owner: str = Depends(security.authenticate),
+) -> dict:
+    """Passports only, MRZ only. The upload is taken in and read like any other (same checks, same job, same result
+    shape), but nothing except the machine-readable zone of a passport is accepted: a card, a visa, a residence permit or
+    a page with no MRZ comes back failed, with a message for the applicant. POST /v1/documents/extract stays the endpoint
+    for every kind of document."""
+    return await extract(request, files, pipeline.PASSPORT_MRZ, consent_training, expected_nationality, expected_surname,
+                         expected_given_names, expected_document_number, expected_birth_date, expected_expiry_date, owner)
+
+
+@app.post("/v1/photos/check")
+async def check_photo(request: Request, file: UploadFile = File(...), owner: str = Depends(security.authenticate)) -> dict:
+    """Is this personal photo usable for the application? Answers at once from the picture alone: one face, large enough,
+    centred and whole, sharp, well lit, on a light plain background. Nothing is stored or queued, and the face is not
+    compared with anything."""
+    security.limiter.check(security.client_id(request, owner))
+    security.allow(request, "upload", owner)
+    data = await file.read(config.max_bytes() + 1)
+    validate_image(data, file.content_type)
+    try:
+        verdict = await run_in_threadpool(photo.check, data)
+    except photo.Unavailable as exc:
+        raise HTTPException(503, {"code": "photo_check_unavailable", "message": str(exc)}) from None
+    audit.event("photo_checked", key=owner, acceptable=verdict["acceptable"], issues=",".join(verdict["issues"]))
+    return verdict
 
 
 def _own_job(job_id: str, owner: str, any_job: bool = False):
