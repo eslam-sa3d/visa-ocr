@@ -179,7 +179,7 @@ CARD = ["KINGDOM OF BAHRAIN", "IDENTITY CARD", "Name: Sample Person", "Nationali
 
 class _CardReader(_Reader):
     def extract(self, images, hint):
-        assert hint == "gcc_id"                      # the readers are told "card with no MRZ", never the endpoint's own word
+        assert hint == pipeline.CARD_TEXT            # the readers are told to read the printed text and search for no MRZ
         return super().extract(images, hint)
 
 
@@ -208,3 +208,24 @@ def test_card_endpoint_runs_a_card_only_job(monkeypatch):
     r = client.post("/v1/cards/extract", files=[("files", ("c.png", _page(), "image/png"))])
     job = client.get("/v1/jobs/" + r.json()["jobId"]).json()
     assert job["status"] == "failed" and job["error"]["code"] == "not_a_card"
+
+
+def test_card_only_asks_paddle_once_and_no_other_reader(monkeypatch):
+    from app import engines
+    calls = []
+
+    class Paddle:
+        def mrz_retries(self, images, straighten=True):
+            raise AssertionError("no MRZ search on the card-only endpoint")
+
+        def extract(self, images, hint, deep=True):
+            calls.append((hint, deep))
+            return EngineOutput(engine="paddle-ocr", fields={"textLines": [{"text": t, "score": 0.98} for t in CARD]})
+
+    def by_name(name):
+        if name != "paddle-ocr":
+            raise AssertionError("no second reader on the card-only endpoint")
+        return Paddle()
+    monkeypatch.setattr(engines, "get_engine_by_name", by_name)
+    out = engines.AutoEngine().extract([b"x"], pipeline.CARD_TEXT)
+    assert calls == [("gcc_id", False)] and out.mrz_searched

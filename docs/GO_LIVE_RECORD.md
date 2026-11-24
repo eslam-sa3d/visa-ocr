@@ -7,11 +7,11 @@ is closed or has a written exception from the system owner.
 Image tag: `visa-ocr:1.0.0-<commit>`. The image starts in production mode by default.
 The build does not finish unless both proofs pass, so a release folder that exists has passed them.
 
-## Done by the build (2026-11-22)
+## Done by the build (2026-11-24)
 
 | Check | Result | Proof |
 |---|---|---|
-| Automated tests | 355 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
+| Automated tests | 415 pass, 9 skipped (the 9 need PostgreSQL) | `pytest` |
 | Static check | clean | `python -m pyflakes app training tools tests deploy` |
 | System test, production reader, training on | 34 of 34 | `tools/system_test.py --training` |
 | System test, production set-up (`PRODUCTION=1`, key file, AES-256-GCM, TLS, audit log) | 33 of 33, 1 skipped (training is off) | `tools/system_test.py --insecure` against the entrypoint |
@@ -20,11 +20,17 @@ The build does not finish unless both proofs pass, so a release folder that exis
 | Offline start and read, test mode | PASS at build | `BUILD_INFO.txt` (`tools/offline_smoke.sh`) |
 | Production set-up in the real image, offline: keys with roles from a file, a request with no key refused, the portal key barred from listing models, a blank photo turned back with a retake message, stored result encrypted, audit log written, read-only image | PASS at build | `BUILD_INFO.txt` (`tools/production_smoke.sh`) |
 | Base image pinned by digest | recorded at build | `BUILD_INFO.txt` |
-| Real images, production reader | 432 images; 257 to 259 of 286 passports and visas pass every check digit; none accepted wrongly against the provisional answers; 51 of 75 permit fronts and 7 of 10 Omani cards read from printed text (all sent to review) | `tools/read_folder.py`, `tools/accuracy_real.py` |
+| Real images, production reader | 432 images on a laptop, 24 Nov: 258 of 286 passports and visas pass every check digit, 79 accepted without review; 64 of 75 residence-card fronts and 67 of 71 Gulf cards read from printed text (all sent to review); 25 not read and turned back with a retake message (16 no MRZ found or cut off, 8 unclear, 1 unreadable file). Median 5.9 s a document, 95% within 19 s. The values read have not yet been confirmed by a person (item 3 below) | `tools/read_folder.py`, `tools/accuracy_real.py` |
+| Readers sized to the container | One reader process per core the container is given, each needing 2 GB; no fixed limit in the image. Tried at 1 core with 2 GB and at 2 cores | `tests/test_readers.py`, `docs/SERVER_SIZING.md` |
+| Load, generated documents, 2-core test machine | About 17 documents a minute for each core; uploads beyond capacity wait, then are turned back with "busy" (HTTP 429), none lost | `tools/capacity_test.py`, `docs/SERVER_SIZING.md` |
+| Two instances on one PostgreSQL queue | 32 of 32 uploads read once each | `docs/SERVER_SIZING.md` |
+| Unclear photo refused at upload | HTTP 422 `image_unclear` with the retake message, in under 2 seconds | `tests/test_image_clarity.py`, `tools/production_smoke.sh` |
+| Passport-only endpoint, card-only endpoint and personal-photo check | `POST /v1/passports/extract`, `POST /v1/cards/extract`, `POST /v1/photos/check` | `tests/test_photo_and_passport.py`, `docs/API_EXAMPLES.md` |
 
 Document types read: passports, visas and ID cards from the MRZ side; Saudi, UAE, Kuwait, Qatar, Bahrain and Oman cards
 and the front of European, UK and US residence cards from printed text (always reviewed; built against about 85 sample
-images, values not yet checked by a person).
+images, values not yet checked by a person). The personal-photo check has been tried on very few photos and its limits
+(`PHOTO_*`) are not yet set to a MOFA photo standard.
 
 Found and fixed while preparing this record:
 - The container refused to start when keys came only from `API_KEYS_FILE` (the production set-up).
@@ -36,9 +42,9 @@ Found and fixed while preparing this record:
 | # | Check | Who | Why it cannot be done by the build |
 |---|---|---|---|
 | 1 | Tests with PostgreSQL attached (`TEST_DATABASE_URL`) | Server team | Only if PostgreSQL will be used; one container needs none |
-| 2 | Time limit and capacity: `tools/suggest_deadline.py` and `tools/load_test.py` on the production server; set `OCR_DEADLINE_SECONDS` and `JOB_THREADS` | Server team | Every timing so far is from a laptop |
+| 2 | Time limit and capacity: `tools/suggest_deadline.py` and `tools/capacity_test.py` on the production servers with real photos (`DEPLOYMENT.txt`, step 6); set `OCR_DEADLINE_SECONDS`; size the servers from the measured documents a minute | Server team | Every timing so far is from a laptop or a 2-core test machine; real photos read at about half the speed of generated ones |
 | 3 | Accuracy against answers a person confirmed (`review.html`, then `tools/accuracy_real.py --with-form`); fill `docs/ACCEPTANCE_SIGNOFF.md` | Business owner | The answers so far are the service's own readings |
-| 4 | Portal shows `retake.message` to the applicant: on the upload call (HTTP 422, `image_unclear`), for failed jobs (`image_unclear`, `mrz_not_found`, `multiple_documents`), and `result.retake` on a reading (failing check digit, or passport page cut off) | Portal team | Portal change |
+| 4 | Portal shows `retake.message` to the applicant: on the upload call (HTTP 422, `image_unclear`), for failed jobs (`image_unclear`, `mrz_not_found`, `multiple_documents`, `not_a_passport`, `not_a_card`, `card_not_found`), and `result.retake` on a reading (failing check digit, or passport page cut off) | Portal team | Portal change |
 | 5 | Organisation certificate mounted; keys made with `deploy/production/make_keys.py` and stored in the key management system; `data.key` on a different volume from the data | Server team | Site secrets |
 | 6 | Audit log arriving in the SIEM; a malware scanner chosen (`UPLOAD_SCAN_COMMAND`) or a written exception | Cybersecurity | Site systems |
 | 7 | Second-person code review against `docs/SECURE_CODING.md`: date ______ by ______ | Someone other than the author | Independence |

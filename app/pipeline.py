@@ -254,7 +254,7 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             return "failed", {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
                               "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()}
         with timing.step("readers"):
-            output = engine.extract(images, hint)
+            output = engine.extract(images, CARD_TEXT if card_only else hint)
         mrz_confidence = output.mrz_confidence
         text_lines = (output.fields or {}).get("textLines") if isinstance(output.fields, dict) else None
         # The MRZ-only search is slow (several seconds when nothing is there). Skip it when the caller said the card has no MRZ and

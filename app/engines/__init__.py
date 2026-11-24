@@ -31,6 +31,11 @@ class AutoEngine:
     name = "auto"
 
     def extract(self, images, doc_type_hint):
+        # "card_text" is the card-only endpoint: the printed front of a card, read once by PaddleOCR. No reader searches
+        # for an MRZ and no second reader is asked, so a card is answered as soon as its text is read.
+        text_only = doc_type_hint == "card_text"
+        if text_only:
+            doc_type_hint = "gcc_id"
         wants_mrz = doc_type_hint not in ("iqama", "gcc_id")
         with timing.step("quickLook"):
             seen: list = []
@@ -42,7 +47,11 @@ class AutoEngine:
             # When an MRZ is expected, PaddleOCR's slow last-chance searches wait until the second pair has had its turn.
             staged = wants_mrz and hasattr(paddle, "mrz_retries")
             with timing.step("paddle"):
-                out = paddle.extract(images, doc_type_hint, deep=False) if staged else paddle.extract(images, doc_type_hint)
+                shallow = staged or (text_only and hasattr(paddle, "mrz_retries"))
+                out = paddle.extract(images, doc_type_hint, deep=False) if shallow else paddle.extract(images, doc_type_hint)
+            if text_only:
+                out.mrz_searched = True
+                return out
         except EngineUnavailable:
             return get_engine_by_name(EnsembleEngine.name).extract(images, doc_type_hint)
         except Exception as exc:  # noqa: BLE001
@@ -135,6 +144,18 @@ class AutoEngine:
 
     @staticmethod
     def _second_opinion(out, images, doc_type_hint, seen=None):
+        """The second opinion, then one last resort: when the reading still fails a check digit and the quick look at the
+        start had read this same MRZ with every check digit passing (PaddleOCR misread one character of the number), the
+        reading the check digits prove is the one to use. Its name line is still for a person to confirm."""
+        from ..mrz import check_score as score, same_zone
+        best = AutoEngine._ask_the_pair(out, images, doc_type_hint, seen)
+        if best.mrz_lines and not score(best.mrz_lines)[1] and seen is not None and seen.mrz_lines \
+                and score(seen.mrz_lines)[1] and same_zone(seen.mrz_lines, best.mrz_lines):
+            return seen
+        return best
+
+    @staticmethod
+    def _ask_the_pair(out, images, doc_type_hint, seen=None):
         """PaddleOCR often reads an MRZ correctly but scores it low (0.6 on a phone photo), which sends the whole document to
         review. When its confidence is below the review threshold, the Tesseract + RapidOCR pair reads it too: if they return the
         same lines and every check digit passes, two independent readers agree, and that agreement is the confidence. If the
@@ -142,12 +163,6 @@ class AutoEngine:
         from .. import config
         from ..mrz import check_score as score
         threshold = config.min_confidence_unprotected()
-        # The quick look read this same MRZ with every check digit passing and PaddleOCR did not (one character of the number
-        # misread): the reading the check digits prove is the one to use. Its name line is still for a person to confirm.
-        if seen is not None and seen.mrz_lines and score(seen.mrz_lines)[1] and not score(out.mrz_lines)[1]:
-            from ..mrz import same_zone as same
-            if same(seen.mrz_lines, out.mrz_lines):
-                return seen
         if out.mrz_confidence is not None and out.mrz_confidence >= threshold:
             return out
         # The quick look at the start already read the strip with the other readers. The same lines from them, with every
