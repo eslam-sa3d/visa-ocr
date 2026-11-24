@@ -76,7 +76,8 @@ audit = sum(1 for _ in open("/var/log/visa-ocr/audit.log"))
 pb = uuid.uuid4().hex                           # personal-photo check: the face detector must be inside the image
 pbody = (f"--{pb}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"me.png\"\r\nContent-Type: image/png\r\n\r\n").encode() + blank.getvalue() + f"\r\n--{pb}--\r\n".encode()
 pstatus, pverdict = call("/v1/photos/check", pbody, {"Content-Type": f"multipart/form-data; boundary={pb}", **key})
-photo_ok = pstatus == 200 and pverdict.get("acceptable") is False and "no_face" in (pverdict.get("issues") or [])
+# a blank page is refused and the face detector ran and found none (a missing detector answers 503, not a count)
+photo_ok = pstatus == 200 and pverdict.get("acceptable") is False and (pverdict.get("measures") or {}).get("faces") == 0
 pjob = read_at("/v1/passports/extract", sample)   # passport-only endpoint reads the sample passport
 readers = call("/readyz")[1].get("readers")
 print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| passport endpoint:", pjob.get("status"), "| photo check:", "ok" if photo_ok else f"FAILED ({pstatus})", "| blank photo:", (turned_back.get("error") or {}).get("code"),
@@ -84,7 +85,7 @@ print("status:", done["status"], "| engine:", (done.get("result") or {}).get("en
 ok = readers == 2 and photo_ok and pjob.get("status") == "done" and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
 raise SystemExit(0 if ok else "FAIL: see the line above")
 PY
-)"
+)" || { echo "$OUT"; exit 1; }      # the line that says which check failed is shown before the build stops
 echo "$OUT"
 echo "$OUT" | grep -q "^status: done" || { echo "FAIL: no finished read was reported from inside the container" >&2; exit 1; }
 docker volume rm "$NAME-data" >/dev/null 2>&1 || true
