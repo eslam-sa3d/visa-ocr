@@ -7,8 +7,9 @@ WHAT THIS IS
   on its data volume); PostgreSQL is optional for several servers sharing one queue.
 
 BEFORE YOU START
-  [ ] Linux server, Intel/AMD 64-bit, Docker with the compose plugin. Start with 4 CPU cores and 8 GB RAM per container;
-      measure before you size for production load (see MEASURE below).
+  [ ] Linux server, Intel/AMD 64-bit, Docker with the compose plugin. Each container is limited to 1 CPU core
+      and 2 GB RAM (production/docker-compose.yml) and reads about 8 documents a minute at those limits. For more
+      throughput run more containers behind the load balancer with a shared PostgreSQL queue (DATABASE_URL).
   [ ] The server does NOT need internet access.
   [ ] Only the portal's servers should be able to reach this service. Do not expose it to the internet.
   [ ] A TLS certificate and key for the service's host name, from your organisation's CA.

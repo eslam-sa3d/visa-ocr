@@ -41,6 +41,7 @@ ENV PRODUCTION=1 \
     MODELS_DIR=/srv/models \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2 \
     HOME=/data/home \
     PADDLE_PDX_CACHE_HOME=/data/home/.paddlex \
     JOB_DB_PATH=/data/jobs.db

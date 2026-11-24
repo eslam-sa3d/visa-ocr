@@ -26,7 +26,9 @@ services:
       - no-new-privileges:true
     deploy:
       resources:
-        limits: {cpus: "4", memory: 8g}     # a starting point; size from tools/load_test.py on this server
+        # One worker: 1 core and 2 GB. Load-tested at these limits (24 Nov 2026, generated documents): about 8 documents a
+        # minute, memory peak 1.6 GB with 16 clients queued. For more throughput run more containers, not a bigger one.
+        limits: {cpus: "1", memory: 2g}
 # The service never calls out. Block outbound traffic from this host at the firewall as well.
 volumes:
   visa-ocr-data:
