@@ -32,7 +32,10 @@ def call(path, data=None, headers=None):
         with urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers or {}), context=ctx, timeout=60) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
-        return e.code, {}
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except ValueError:
+            return e.code, {}
 for _ in range(120):
     try:
         if call("/readyz")[0] == 200: break
@@ -47,6 +50,8 @@ def upload(image):
 def read(image):
     body, h = upload(image)
     status, j = call("/v1/documents/extract", body, {**h, **key})
+    if status == 422 and (j.get("detail") or {}).get("code") == "image_unclear":
+        return {"status": "failed", "error": j["detail"], "refusedAtUpload": True}     # refused at once, no job
     assert status == 202, f"upload gave {status}"
     for _ in range(180):
         j = call("/v1/jobs/" + j["jobId"], headers=key)[1]

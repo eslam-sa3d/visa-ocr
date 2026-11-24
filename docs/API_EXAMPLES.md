@@ -158,14 +158,28 @@ Whenever the applicant should take the photo again, the response carries a `reta
 
 | Where | When | Job status |
 |---|---|---|
-| `error.retake`, code `image_unclear` | The photo is plainly unusable (blurred, too dark, washed out, too small, blank). Turned back before any reading, in milliseconds. | `failed` |
+| `detail.retake` on the upload call, HTTP 422, code `image_unclear` | The photo is plainly unusable (blurred, too dark, washed out, too small, blank). Refused at once, on the upload itself: no job is created, whatever the load. | no job |
+| `error.retake`, code `image_unclear` | The photo is plainly unusable (blurred, too dark, washed out, too small, blank). Only when `UPLOAD_CLARITY_CHECK=0`: turned back before any reading, as a failed job. | `failed` |
 | `error.retake`, code `mrz_not_found` or `image_unclear` | Nothing could be read from the photo. | `failed` |
 | `error.retake`, code `multiple_documents` | The photo shows more than one document with machine-readable lines. Nothing is read from it. | `failed` |
 | `result.retake` | An MRZ was read but a check digit fails, or a card's ID number could not be read. The reading is still returned for the reviewer. | `done`, `needsReview: true` |
 
 `retake.reasons` lists why, most serious first: `blurred`, `too_dark`, `too_bright`, `low_contrast`, `too_small`, `mrz_unclear`, `card_unclear`, `not_found`. A reading whose check digits all pass never carries `retake`, however the photo looks.
 
-Unusable photo (job status `failed`):
+Unusable photo, refused on the upload call (`POST /v1/documents/extract` answers HTTP 422, no job is created):
+
+```json
+{
+  "detail": {
+    "code": "image_unclear",
+    "message": "The photo is blurred. Hold the phone steady, wait for it to focus on the document, and take the photo again.",
+    "retake": {"recommended": true, "reasons": ["blurred"], "message": "The photo is blurred. Hold the phone steady, wait for it to focus on the document, and take the photo again."},
+    "quality": {"clear": false, "width": 1920, "height": 2560, "sharpness": 6.2, "brightness": 141.0, "contrast": 31.5, "glare": 0.0, "issues": ["blurred"], "doubts": []}
+  }
+}
+```
+
+Unusable photo with `UPLOAD_CLARITY_CHECK=0`, or a photo that could not be read (job status `failed`):
 
 ```json
 {

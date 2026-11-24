@@ -79,8 +79,12 @@ BEFORE YOU START
 
 FOR THE PORTAL TEAM
   When the applicant should take the photo again, the response carries a "retake" block. Show retake.message to the
-  applicant. It appears in error.retake when the job failed (codes image_unclear and mrz_not_found) and in result.retake
-  when a document was read but a check digit fails. A reading whose check digits all pass never carries it.
+  applicant. It appears in three places:
+    - on the upload call itself: HTTP 422 with detail.code image_unclear and detail.retake, when the photo is plainly
+      unusable (blurred, dark, washed out, too small). Answered at once, whatever the load; no job is created.
+    - in error.retake when the job failed (codes image_unclear, mrz_not_found and multiple_documents).
+    - in result.retake when a document was read but a check digit fails.
+  A reading whose check digits all pass never carries it.
   POST /v1/documents/check answers at once whether a photo is clear enough, before it is sent for reading.
   Send the applicant's form data with each upload: it confirms the name and nationality, which no check digit covers.
   Examples: docs/API_EXAMPLES.md in docs.tar.gz.

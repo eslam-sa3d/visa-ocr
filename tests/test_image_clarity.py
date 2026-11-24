@@ -131,3 +131,26 @@ def test_one_clear_image_among_several_is_enough():
     assert status == "done" and reader.calls == 1 and "retake" not in res
     status, res = pipeline.run([out.getvalue(), out.getvalue()], None, Applicant(), reader)
     assert status == "failed" and res["code"] == "image_unclear"
+
+
+@pytest.mark.clarity
+def test_unclear_photo_is_refused_on_the_upload_itself(monkeypatch):
+    """A plainly unusable photo is answered on the upload call, with the retake message, and takes no place in the queue.
+    One clear image among several is enough to go on. The old behaviour (a job that fails) is one setting away."""
+    import time
+    from fastapi.testclient import TestClient
+    import app.main as main
+    client = TestClient(main.app)
+    before = main.store.pending_count() if hasattr(main.store, "pending_count") else None
+    started = time.monotonic()
+    r = client.post("/v1/documents/extract", files=[("files", ("a.png", _page(blur=9), "image/png"))])
+    assert time.monotonic() - started < 2
+    d = r.json()["detail"]
+    assert r.status_code == 422 and d["code"] == "image_unclear" and d["retake"]["recommended"]
+    assert d["retake"]["message"] == quality.MESSAGES["blurred"] and "jobId" not in r.json()
+    if before is not None:
+        assert main.store.pending_count() == before
+    assert client.post("/v1/documents/extract", files=[("files", ("a.png", _page(blur=9), "image/png")),
+                                                       ("files", ("b.png", _page(), "image/png"))]).status_code == 202
+    monkeypatch.setenv("UPLOAD_CLARITY_CHECK", "0")
+    assert client.post("/v1/documents/extract", files=[("files", ("a.png", _page(blur=9), "image/png"))]).status_code == 202

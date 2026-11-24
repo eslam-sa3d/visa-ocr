@@ -38,7 +38,7 @@ Found and fixed while preparing this record:
 | 1 | Tests with PostgreSQL attached (`TEST_DATABASE_URL`) | Server team | Only if PostgreSQL will be used; one container needs none |
 | 2 | Time limit and capacity: `tools/suggest_deadline.py` and `tools/load_test.py` on the production server; set `OCR_DEADLINE_SECONDS` and `JOB_THREADS` | Server team | Every timing so far is from a laptop |
 | 3 | Accuracy against answers a person confirmed (`review.html`, then `tools/accuracy_real.py --with-form`); fill `docs/ACCEPTANCE_SIGNOFF.md` | Business owner | The answers so far are the service's own readings |
-| 4 | Portal shows `retake.message` to the applicant and handles `image_unclear` | Portal team | Portal change |
+| 4 | Portal shows `retake.message` to the applicant: on the upload call (HTTP 422, `image_unclear`), and for failed jobs (`image_unclear`, `mrz_not_found`, `multiple_documents`) | Portal team | Portal change |
 | 5 | Organisation certificate mounted; keys made with `deploy/production/make_keys.py` and stored in the key management system; `data.key` on a different volume from the data | Server team | Site secrets |
 | 6 | Audit log arriving in the SIEM; a malware scanner chosen (`UPLOAD_SCAN_COMMAND`) or a written exception | Cybersecurity | Site systems |
 | 7 | Second-person code review against `docs/SECURE_CODING.md`: date ______ by ______ | Someone other than the author | Independence |

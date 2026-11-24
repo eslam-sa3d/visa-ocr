@@ -206,7 +206,7 @@ Line crops and label files made for a training run are deleted when the run ends
 | Correction refused with `409` | The training data for that job was purged | Nothing to do: purged data is not written back |
 | `429 rate_limited` | More than `RATE_LIMIT_PER_MIN` requests from one client | Raise the limit or set it to 0 behind the portal |
 | `mrz_not_found` | No MRZ visible, or blurred, cut off or sideways | Retake the photo; for cards without an MRZ choose "Iqama / GCC ID" |
-| `image_unclear` | The photo is blurred, too dark, washed out, too small or blank | Show `error.retake.message` to the applicant and ask for another photo. Thresholds: `QUALITY_<NAME>` (see `app/config.py`); `IMAGE_QUALITY_CHECK=0` turns the check off |
+| `image_unclear` | The photo is blurred, too dark, washed out, too small or blank | Show `error.retake.message` to the applicant and ask for another photo. Thresholds: `QUALITY_<NAME>` (see `app/config.py`); `IMAGE_QUALITY_CHECK=0` turns the check off. A plainly unusable photo is refused on the upload call itself with HTTP 422 and the same code and `retake` block (in `detail`); `UPLOAD_CLARITY_CHECK=0` goes back to a job that fails |
 | `multiple_documents` | The photo shows more than one document with machine-readable lines (two passports, or a passport open at a visa) | Show `error.retake.message` to the applicant and ask for a photo of one document |
 | Result carries `retake` | An MRZ check digit fails, or a card's ID number could not be read | Show `result.retake.message` to the applicant; the reading is still there for the reviewer |
 | `/readyz` answers `not_ready ... is missing` | `OCR_ENGINE=paddle-ocr` without model files | Fetch the models, or use `ensemble` |

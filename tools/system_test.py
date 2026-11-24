@@ -103,6 +103,14 @@ def png_bytes(size=(300, 200), color="white") -> bytes:
     return b.getvalue()
 
 
+def clear_png() -> bytes:
+    """A clear picture of a document, as PNG: for checks that need an upload to be taken in (a blank picture is refused at
+    once as unclear, before any job exists)."""
+    b = io.BytesIO()
+    Image.open(io.BytesIO(make_doc("TD3", 6900)[0])).save(b, "PNG")
+    return b.getvalue()
+
+
 def make_doc(fmt: str, seed: int, variant: str = "clean"):
     rng = random.Random(seed)
     kw = A.rnd_case(rng, fmt)
@@ -206,10 +214,16 @@ def functional(api: Api, a) -> None:
 
     @check(g, "blank page is turned back with a message asking for another photo")
     def _():
-        j = api.read([png_bytes((900, 600))], {"doc_type_hint": "passport"})
-        assert j["status"] == "failed" and j["error"]["code"] in ("image_unclear", "mrz_not_found"), j.get("error")
-        assert len(j["error"]["message"]) > 20 and j["error"]["retake"]["recommended"] is True
-        assert j["error"]["retake"]["message"] and j["error"]["retake"]["reasons"]
+        r = api.upload([png_bytes((900, 600))], {"doc_type_hint": "passport"})
+        if r.status_code == 422:                        # refused on the upload itself: no job, the message comes at once
+            error = r.json()["detail"]
+        else:                                           # UPLOAD_CLARITY_CHECK=0: a job that fails with the same message
+            j = api.wait(r.json()["jobId"])
+            assert j["status"] == "failed", j
+            error = j["error"]
+        assert error["code"] in ("image_unclear", "mrz_not_found"), error
+        assert len(error["message"]) > 20 and error["retake"]["recommended"] is True
+        assert error["retake"]["message"] and error["retake"]["reasons"]
 
     @check(g, "instant photo check: a clear photo passes, a blank one is turned back, nothing is queued")
     def _():
@@ -219,7 +233,8 @@ def functional(api: Api, a) -> None:
         bad = api.post("/v1/documents/check", files={"file": ("a.png", png_bytes((900, 600)), "image/png")})
         assert bad.status_code == 200 and bad.json()["acceptable"] is False and bad.json()["retake"]["message"]
         assert api.post("/v1/documents/check", files={"file": ("a.png", b"<html>", "image/png")}).status_code == 415
-        assert api.post("/v1/documents/check", files={"file": ("a.png", data, "image/png")}, key=None).status_code in (401, 403)
+        if a.key:                                       # a server without keys has nothing to refuse
+            assert api.post("/v1/documents/check", files={"file": ("a.png", data, "image/png")}, key=None).status_code in (401, 403)
 
     @check(g, "/v1/mrz/parse: valid lines parse; a changed digit fails its check; nonsense is refused")
     def _():
@@ -266,8 +281,8 @@ def functional(api: Api, a) -> None:
 
     @check(g, "caller's correlation id is kept on the job")
     def _():
-        r = api.upload([png_bytes()], None)
-        r2 = api.post("/v1/documents/extract", files=[("files", ("a.png", png_bytes(), "image/png"))], headers={"X-Correlation-ID": "portal-req-123"})
+        r = api.upload([clear_png()], None)
+        r2 = api.post("/v1/documents/extract", files=[("files", ("a.png", clear_png(), "image/png"))], headers={"X-Correlation-ID": "portal-req-123"})
         assert r.status_code == 202 and r2.json()["correlationId"] == "portal-req-123"
 
     @check(g, "training cycle: consent, correction saved, no-consent refused, purge blocks later corrections")
@@ -336,7 +351,8 @@ def security_checks(api: Api, a) -> None:
 
     @check(g, "job ids are random 128-bit values")
     def _():
-        ids = [api.upload([png_bytes()]).json()["jobId"] for _ in range(6)]
+        page = clear_png()
+        ids = [api.upload([page]).json()["jobId"] for _ in range(6)]
         assert all(len(i) == 32 and int(i, 16) >= 0 for i in ids) and len(set(ids)) == 6
         assert len({i[:8] for i in ids}) == 6 and len({i[-8:] for i in ids}) == 6
 
@@ -392,10 +408,10 @@ def security_checks(api: Api, a) -> None:
         assert svg.status_code == 415
         html = api.upload([b"<html><script>alert(1)</script></html>"], ctype="image/png")
         assert html.status_code == 415
-        poly = api.upload([png_bytes() + b"<script>alert(1)</script>" + b"PK\x03\x04" + b"\x00" * 100], ctype="image/png")
+        poly = api.upload([clear_png() + b"<script>alert(1)</script>" + b"PK\x03\x04" + b"\x00" * 100], ctype="image/png")
         assert poly.status_code == 202                  # a valid PNG with trailing bytes is just an image: it must not crash
         j = api.wait(poly.json()["jobId"])
-        assert j["status"] == "failed" and j["error"]["code"] in ("mrz_not_found", "invalid_image", "image_unclear")
+        assert j["status"] == "done" or j["error"]["code"] in ("mrz_not_found", "invalid_image", "image_unclear")
         assert api.get("/healthz", key=None).status_code == 200
 
     @check(g, "corrupt image body ends as a clean failed job, not a crash or a stack trace")

@@ -153,6 +153,9 @@ _QUALITY_DEFAULTS = {"min_side_reject": 400, "min_side_doubt": 900, "sharpness_r
 
 
 def quality_check() -> bool: return os.environ.get("IMAGE_QUALITY_CHECK", "1") != "0"
+# An unusable photo is refused on the upload call itself (HTTP 422), before it takes a place in the queue: the applicant
+# hears at once, whatever the load. 0 = the old behaviour, a job that fails with the same code and message.
+def refuse_unclear_at_upload() -> bool: return quality_check() and os.environ.get("UPLOAD_CLARITY_CHECK", "1") != "0"
 
 
 def quality_thresholds() -> dict:

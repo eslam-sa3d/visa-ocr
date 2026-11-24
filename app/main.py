@@ -323,6 +323,13 @@ async def extract(
             await run_in_threadpool(scan_for_malware, data)        # only when UPLOAD_SCAN_COMMAND is set
             async with _shrink_slots:              # decode and resize off the event loop
                 images.append(await run_in_threadpool(shrink_for_ocr, data))   # queue, readers and training store get this image
+        if config.refuse_unclear_at_upload():
+            # Measured from the pixels in a fraction of a second: an unusable photo is answered now, not when its turn comes.
+            clarity = await run_in_threadpool(quality.clearest, images)
+            if clarity.issues:
+                audit.event("upload_refused", key=owner, reason="image_unclear", issues=",".join(clarity.issues))
+                raise HTTPException(422, {"code": "image_unclear", "message": quality.retake_message(clarity.issues),
+                                          "retake": quality.retake(clarity.issues), "quality": clarity.to_dict()})
         if consent_training and training.enabled:
             training.save_images(job.id, images)
             store.update(job.id, consent_training=True)
