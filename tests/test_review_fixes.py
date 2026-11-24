@@ -1553,3 +1553,121 @@ def test_a_box_english_read_well_is_not_read_again_in_arabic(monkeypatch):
     ar.answers.update({"mrz": ("x", 0.1), "name": ("y", 0.1)})
     reader._recognise(boxes, crops, 0)
     assert ar.seen == [crops]
+
+
+def _eu_card(labels: dict, sex="M/M", nationality="UKR", number="PS0130332", names=("SAMPLE", "Anna-Maria"), sex_row=True):
+    """The text of an EU uniform-format residence card as the reader returns it: every field in its usual place."""
+    def L(text, x0, y0, x1, y1):
+        return {"text": text, "score": 0.98, "image": 0, "box": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}
+    lines = [L(number, 424, 8, 579, 36), L("EST", 17, 12, 103, 47), L(labels.get("title", "ELAMISLUBA"), 242, 12, 370, 33),
+             L(number, 10, 49, 126, 70), L(labels.get("name", "PEREKONNANIMI Eesnimi"), 219, 80, 446, 95),
+             L(names[0], 220, 93, 281, 113), L(names[1], 220, 113, 345, 130),
+             L(labels.get("nationality", "KODAKONDSUS"), 290, 135, 434, 149), L(labels.get("sex", "SUGU"), 221, 136, 276, 147),
+             L(nationality, 292, 147, 322, 162), L("08 01 1980", 450, 147, 544, 161),
+             L(labels.get("expiry", "KEHTIV KUNI"), 449, 162, 581, 175), L("LOA LIIK", 220, 164, 349, 177),
+             L("21 09 2031", 449, 173, 545, 190), L("PIKAAJALINE ELANIK", 218, 174, 409, 190), L("RESIDENCE PERMIT", 220, 347, 345, 360)]
+    if sex_row:
+        lines.append(L(sex, 220, 147, 252, 162))
+    return lines
+
+
+@pytest.mark.parametrize("labels", [
+    {},                                                                        # Estonian labels only
+    {"name": "PRIJMENI Jmena", "sex": "POHLAVI", "nationality": "STATNI PRISLUSNOST", "expiry": "PLATNOST DO"},      # Czech
+    {"name": "EFTERNAMN FOrRamR/ SURNAMES ForsOames", "sex": "KON", "nationality": "NATIOMALITY", "expiry": "CARD EXPIRY"},
+    {"name": "x", "sex": "y", "nationality": "z", "expiry": "w"},              # every label unreadable
+])
+def test_eu_residence_card_is_read_from_its_layout_whatever_the_labels_say(labels):
+    """Ten test cards failed on missing sex, nationality, names or dates because their small labels were in a language the
+    reader had no word for, or were misread. The uniform format puts every field in the same place: that is what is read."""
+    from datetime import date
+    from app.permits import parse_permit
+    d = parse_permit(_eu_card(labels), today=date(2026, 11, 24))["document"]
+    assert (d["surname"], d["givenNames"], d["sex"], d["nationality"]) == ("SAMPLE", "ANNA-MARIA", "M", "UKR")
+    assert (d["birthDate"], d["expiryDate"], d["documentNumber"]) == ("1980-01-08", "2031-09-21", "PS0130332")
+
+
+def test_eu_residence_card_details():
+    from datetime import date
+    from app.permits import parse_permit, sex_letter
+    assert [sex_letter(t) for t in ("K/F", "M/M", "F/M", "F", "K", "W", "X", "SEX", "UTO")] == ["F", "M", "M", "F", "F", "F", "X", None, None]
+    today = date(2026, 11, 24)
+    one_line = parse_permit(_eu_card({}, names=("x", "CITIZEN Politis")), today=today)["document"]        # surname and forename on one line
+    assert (one_line["surname"], one_line["givenNames"]) == ("CITIZEN", "POLITIS")
+    digits = parse_permit(_eu_card({}, number="987657543"), today=today)["document"]                     # a number of digits, printed twice
+    assert digits["documentNumber"] == "987657543"
+    missing = parse_permit(_eu_card({}, sex_row=False, nationality="GGBR"), today=today)                # the sex letter and a clean code were not read
+    assert "sex" not in missing["document"] and not missing["document"].get("nationality")
+    assert sorted(s["field"] for s in missing["lookAgain"]) == ["nationality", "sex"] and "_lookAgain" not in missing["document"]
+
+
+def test_missed_card_fields_are_read_again_at_their_spot(monkeypatch):
+    """The sex letter and a misread nationality code are read again where the layout says they are, enlarged."""
+    import io
+    from datetime import date
+    from PIL import Image
+    from app import engines, pipeline
+    from app.permits import parse_permit
+    asked = []
+
+    class Paddle:
+        def read_region(self, image, box, enlarge=3.0):
+            asked.append((round(box[0]), enlarge))
+            return [("F", 0.61)] if box[0] < 250 and enlarge == 5.0 else [("GBR", 0.97)] if box[0] > 250 else []
+    monkeypatch.setattr(engines, "get_engine_by_name", lambda name: Paddle())
+    permit = parse_permit(_eu_card({}, sex_row=False, nationality="GGBR"), today=date(2026, 11, 24))
+    b = io.BytesIO(); Image.new("RGB", (600, 380), "white").save(b, "PNG")
+    pipeline._look_again(permit, [b.getvalue()])
+    d = permit["document"]
+    assert d["sex"] == "F" and d["nationality"] == "GBR" and d["nationalityCode"] == "GBR" and "lookAgain" not in permit
+    assert any(f["code"] == "low_confidence_fields" and "sex" in f["message"] for f in permit["flags"])
+
+
+def test_an_mrz_that_runs_out_of_the_photo_is_called_cut_off():
+    from app.mrz import cut_off
+
+    def L(text, x0, y0, x1, y1):
+        return {"text": text, "image": 0, "box": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}
+    full = [L("VNUSAERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<<", 40, 700, 1200, 740), L("L8988901C4XXX4009078F96121096ZE184226B<<<<<<", 40, 760, 1200, 800)]
+    assert not cut_off(full, [(1280, 980)])
+    short = [L(full[0]["text"][:42], 44, 719, 1267, 801), L(full[1]["text"][:42], 42, 783, 1268, 881)]       # two characters outside
+    assert cut_off(short, [(1280, 977)])
+    assert cut_off([L(full[0]["text"], 70, 730, 1220, 767)], [(1280, 768)])                                 # line 2 below the frame
+    assert not cut_off([L(full[0]["text"], 70, 400, 1220, 440)], [(1280, 768)])                             # one line, mid-page: not a cut
+    assert not cut_off([L("PASSPORT", 0, 0, 1280, 40)], [(1280, 768)])
+
+
+def test_cut_off_mrz_is_turned_back_with_its_own_message():
+    import io
+    from PIL import Image
+    from app import pipeline, quality
+    from app.engines.base import EngineOutput
+    from app.review import Applicant
+
+    class Reader:
+        name = "paddle-ocr"
+        def extract(self, images, hint):
+            junk = ["VNUSASAMPLE<<PERSON<<<<<<<<<<<<<<<<<<<<<<<<<", "VNUSASAMPLE<<PERSON<<<<<<<<<<<<<<<<<<<<<<<<<"]
+            return EngineOutput(engine=self.name, mrz_lines=junk, fields={"mrzCutOff": True, "textLines": [{"text": "VISA"}]}, mrz_searched=True)
+    b = io.BytesIO(); Image.new("RGB", (400, 300), "white").save(b, "PNG")
+    status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader())
+    assert status == "failed" and res["code"] == "mrz_not_found" and res["retake"]["reasons"] == ["mrz_cut_off"]
+    assert res["message"] == quality.MESSAGES["mrz_cut_off"]
+
+
+def test_letter_o_at_the_front_of_a_number_is_restored_by_its_check_digit():
+    """A visa's MRZ gives the passport number O760280 (check digit 9); the O was read as 0. Three single changes satisfy the
+    check digit; the one that puts a letter at the front is taken and reported as a repair. The page prints the number with
+    the same look-alike, which says nothing about that character: the check stays failed until the form confirms it."""
+    from app.mrz import _repair_by_check_digit
+    from app.pipeline import analyse_mrz
+    from app.review import Applicant, apply_mrz_policy
+    assert _repair_by_check_digit("0760280<<", "9") == "O760280<<"
+    lines = ["VNUSASAMPLE<<PERSON<ONE<<<<<<<<<<<<<<<<<<<<<", "0760280<<9JOR6905093M2307079B3AMM08LRT062964"]
+    res = analyse_mrz(lines)
+    apply_mrz_policy(res, 0.99, [{"text": "Passport Number"}, {"text": "0760280"}], Applicant(), mrz_lines=lines)
+    assert res["document"]["documentNumber"] == "O760280" and res["document"]["checks"]["document_number"] is False
+    assert any(f["code"] == "mrz_field_repaired" for f in res["flags"]) and res["needsReview"]
+    typed = analyse_mrz(lines)
+    apply_mrz_policy(typed, 0.99, [], Applicant(document_number="O760280"), mrz_lines=lines)
+    assert typed["document"]["checks"]["document_number"] is True

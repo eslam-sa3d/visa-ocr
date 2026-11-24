@@ -55,6 +55,13 @@ class AutoEngine:
         # full-page scan, a tilted or glary photo), the ensemble's strip search and rotation search often still succeeds.
         images = getattr(out, "upright_images", None) or images      # a photo taken sideways: the other readers get it upright
         has_text = bool(out.fields.get("textLines"))
+        from ..mrz import check_score
+        if wants_mrz and has_text and not check_score(out.mrz_lines)[1] and _cut_off(out, images):
+            # The photo cuts the MRZ off: no reader can read what is outside the frame, and the slow searches would spend
+            # most of a minute proving it. The applicant is asked for a photo with both lines complete.
+            out.mrz_searched = True
+            out.fields = {**out.fields, "mrzCutOff": True}
+            return out
         if wants_mrz and not out.mrz_lines or (not out.mrz_lines and not has_text):
             limited = False
             if has_text and _card_front(out) and not _mrz_trace(out):
@@ -162,6 +169,17 @@ class AutoEngine:
         if s_sec > s_out:
             return second
         return out
+
+
+def _cut_off(out, images) -> bool:
+    try:
+        import io
+        from PIL import Image, ImageOps
+        from ..mrz import cut_off
+        sizes = [ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).size for raw in images]
+        return cut_off(out.fields.get("textLines") or [], sizes)
+    except Exception:  # noqa: BLE001 - not being able to tell is not a reason to stop reading
+        return False
 
 
 def _card_front(out) -> bool:

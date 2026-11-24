@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 import logging
+import re
 import time
 import traceback
 
@@ -12,7 +13,7 @@ from . import config, quality, timing
 from .uploads import shrink_for_ocr
 from .engines import EngineUnavailable, get_engine_by_name
 from .engines.base import Engine, EngineOutput
-from .mrz import MrzError, parse_mrz, plausible_reading, second_mrz
+from .mrz import MrzError, check_score, parse_mrz, plausible_reading, second_mrz
 from .review import Applicant, apply_mrz_policy, compare_applicant
 from .validation import validate
 from .permits import FOUND_FIELDS, parse_permit, says_it_is_a_passport
@@ -97,6 +98,45 @@ def _page_cut_off(doc: dict, boxes, images: list[bytes]) -> bool:
         return zone > 0 and min(tops) < ratio * zone
     except (KeyError, IndexError, TypeError):
         return False
+
+
+def _look_again(permit: dict, images: list[bytes]) -> None:
+    """A card front with a field that was not found, or not read cleanly, on the whole page (one letter for the sex, a
+    three-letter nationality): the spot where it is printed is read again on its own, enlarged. Only the main reader can do
+    this; without it the field stays empty."""
+    accept = {"sex": None, "nationality": lambda t: t if re.fullmatch(r"[A-Z]{3}", t) else None}
+    for spot in permit.pop("lookAgain", None) or []:
+        field = spot.get("field")
+        if field not in accept or permit["document"].get(field) or not 0 <= spot.get("image", 0) < len(images):
+            continue
+        try:
+            from .engines import get_engine_by_name
+            from .permits import sex_letter
+            take = accept[field] or sex_letter
+            reader = get_engine_by_name("paddle-ocr")
+            found = None
+            for enlarge in (3.0, 5.0):
+                found = next(((take(text.strip().upper()), score) for text, score in
+                              reader.read_region(images[spot["image"]], spot["box"], enlarge) if take(text.strip().upper())), None)
+                if found:
+                    break
+            if not found:
+                continue
+            value, score = found
+            permit["document"][field] = value
+            if field == "nationality":
+                permit["document"]["nationalityCode"] = value
+            permit["document"].setdefault("fieldConfidence", {})[field] = round(score, 3)
+            if score < config.min_confidence_visual():
+                for f in permit["flags"]:
+                    if f["code"] == "low_confidence_fields":
+                        f["message"] += ", " + field
+                        break
+                else:
+                    permit["flags"].insert(0, {"code": "low_confidence_fields", "severity": "error",
+                                               "message": "Low OCR confidence for: " + field})
+        except Exception as exc:  # noqa: BLE001 - a second look is a bonus; the reading stands without it
+            log.warning("second look at a card field failed: %s at %s", type(exc).__name__, where(exc))
 
 
 def _fields_out(output: EngineOutput) -> dict:
@@ -223,6 +263,10 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             log.info("lines shaped like an MRZ were not one (no document type letter or dates); treated as no MRZ")
             output.mrz_lines, mrz_confidence = None, None
 
+        if isinstance(output.fields, dict) and output.fields.get("mrzCutOff") and not (output.mrz_lines and check_score(output.mrz_lines)[1]):
+            # The MRZ runs out of the photo. Whatever was pieced together from the part that shows is not a reading.
+            return "failed", {"code": "mrz_not_found", "message": quality.MESSAGES["mrz_cut_off"],
+                              "retake": quality.retake(["mrz_cut_off"])}
         seen_two = isinstance(output.fields, dict) and output.fields.get("secondMrz")
         if output.mrz_lines and (seen_two or text_lines and second_mrz([str(l.get("text", "")) for l in text_lines], output.mrz_lines)):
             # Two documents in one photo: which one the applicant means cannot be known, and the wrong one could be read.
@@ -239,6 +283,8 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             # print without naming Oman, are left to the Gulf reader below.
             named_states, _ = gulf_evidence(text_lines)
             permit = None if (named_states - {"OMN"}) else parse_permit(text_lines[:config.max_text_lines()])
+            if permit:
+                _look_again(permit, output.upright_images or images)
             if permit and sum(1 for k in FOUND_FIELDS if permit["document"].get(k)) >= 3:
                 a_flags, _ = compare_applicant(permit["document"], applicant)
                 permit["flags"] += [f.to_dict() for f in a_flags]

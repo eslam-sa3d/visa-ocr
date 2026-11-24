@@ -36,13 +36,18 @@ _ISSUER = {"us_permanent_resident_card": "USA", "uk_residence_permit": "GBR", "o
 
 # Printed labels, by field. One label line may match several fields.
 _LABELS = {
-    "name": r"surnames?\W+(?:and\W+)?(?:fore|given)\s*names?|noms?\W+pr.?noms?|namen?\W+vornamen|^name$|^hame$|apellidos|cognome|nazwisko",
+    "name": r"surnames?\W+(?:and\W+)?(?:fore|given)\s*names?|noms?\W+pr.?noms?|namen?\W+vornamen|^name$|^hame$|apellidos|cognom[ei]|nazwisko"
+            r"|efternamn|efternavn|etterna[vm]n|prijmeni|priezvisko|vezeteknev|perekonnanimi|apelidos|sukunimi|achternaam|uzvards|pavarde|prezime|priimek",
     "surname": r"^surnames?$|^nom$|^name/surname$",
     "givenNames": r"^(?:given|fore)\s*names?$|^pr.?noms?$",
-    "sex": r"\bsex\b|\bsexe\b|geschlecht|\bsexo\b|\bsesso\b",
-    "nationality": r"nationalit|staatsangeh|nacionalidad|cittadinanza|\bnat\b\.?",
-    "birthDate": r"date of birth|birth date|geburtsdatum|date de naissance|fecha de nacimiento|data di nascita|تاريخ الميلاد|تارخ ال",
-    "expiryDate": r"card expir|valid until|date of expiry|expiry date|gultig bis|valable jusqu|valido hasta|valid to|تاريخ الا?نتهاء|تاريخ الاتهاء",
+    "sex": r"\bsex\b|\bsexe\b|geschlecht|\bsexo\b|\bsesso\b|^kon$|^kjonn$|^nem$|pohlavi|^sugu\b|^spol$|^plec$|sukupuoli|geslacht|^dzimums$|^lytis$",
+    "nationality": r"nationalit|staatsangeh|nacionalidad|cittadinanza|\bnat\b\.?|nasjonalitet|kodakondsus|citizenship|statni prislusnost"
+                   r"|statna prislusnost|allampolgarsag|obywatelstwo|kansalaisuus|drzavljanstvo|pilsoniba|pilietybe|cetatenia",
+    "birthDate": r"date of birth|birth date|geburtsdatum|date de naissance|fecha de nacimiento|data di nascita|تاريخ الميلاد|تارخ ال"
+                 r"|fodelsedatum|fodselsdato|fodselsdag|datum narozeni|datum narodenia|szuletesi|data de nascimento|data nasci|syntymaaika"
+                 r"|geboortedatum|sunniaeg|data urodzenia|datum rojstva|datum rodenja|data nasterii",
+    "expiryDate": r"card expir|valid until|date of expiry|expiry date|gultig bis|valable jusqu|valido hasta|valid to|تاريخ الا?نتهاء|تاريخ الاتهاء"
+                  r"|giltighetsdag|gyldig til|platnost do|ervenyesseg|validade|scadenza|kehtiv kuni|voimassa|geldig tot|waznosc|veljavnost",
     "permitType": r"type of permit|art des titels|cat\. du titre|tipo de permiso|tipo di permesso",
     "birthCountry": r"country of birth",
     "category": r"^category$",
@@ -185,8 +190,10 @@ def _card_number(page: _Page, kind: str) -> tuple[str, dict] | None:
     cands = []
     for l in page.lines:
         t = re.sub(r"[^A-Z0-9]", "", str(l["text"]).upper())
-        if 7 <= len(t) <= 12 and re.search(r"\d", t) and re.search(r"[A-Z]", t) and l not in page.labels and "<" not in str(l["text"]):
+        if 7 <= len(t) <= 12 and re.search(r"\d", t) and l not in page.labels and "<" not in str(l["text"]) and not _DATE.search(str(l["text"])):
             cands.append((t, l))
+    # a number of digits only is the card's number only when it is printed twice, as the card's number is
+    cands = [c for c in cands if re.search(r"[A-Z]", c[0]) or sum(1 for o in cands if o[0] == c[0]) >= 2]
     if not cands:
         return None
     if kind == "uk_residence_permit":
@@ -243,10 +250,13 @@ def parse_permit(raw_lines: list[dict], today: date | None = None) -> dict | Non
         put("permitType", page.value("permitType", lambda t: re.sub(r"\s+", " ", t).strip().upper()
                                      if len(t.strip()) >= 2 and not _ANY_LABEL.search(_plain(t)) else None))
         put("personalNumber", page.value("number", lambda t: (re.fullmatch(r"\D*(\d{8,12})\D*", t) or [None, None])[1]))
-    put("sex", page.value("sex", lambda t: (re.fullmatch(r"\s*([MFX])\s*", t.upper()) or [None, None])[1]))
+    put("sex", page.value("sex", _sex))
     put("nationality", page.value("nationality", lambda t: (re.fullmatch(r"\s*([A-Z]{3})\s*", t.upper()) or [None, None])[1]))
     put("birthDate", page.value("birthDate", lambda t: parse_date(t, False, True, today)))
     put("expiryDate", page.value("expiryDate", lambda t: parse_date(t, us, False, today)))
+
+    if kind == "eu_residence_permit":
+        _by_layout(page, doc, scores, today)
 
     flags: list[Flag] = []
     if doc.get("expiryDate") and doc["expiryDate"] < today.isoformat():
@@ -268,7 +278,126 @@ def parse_permit(raw_lines: list[dict], today: date | None = None) -> dict | Non
     doc["fieldConfidence"] = {k: round(v, 3) for k, v in scores.items() if v}
     doc["correctedFields"] = []
     doc["valid"] = False
-    return {"document": doc, "flags": [f.to_dict() for f in flags], "needsReview": True}
+    look = doc.pop("_lookAgain", None) or None     # where a missed field is printed, for a second look by the reader
+    return {"document": doc, "flags": [f.to_dict() for f in flags], "needsReview": True, **({"lookAgain": look} if look else {})}
+
+
+def sex_letter(text: str) -> str | None:
+    return _sex(text)
+
+
+_SEX_LETTERS = {"M": "M", "F": "F", "X": "X", "K": "F", "W": "F", "V": "F", "H": "M"}     # K kvinna, W weiblich, V vrouw, H homme
+_SEX_WORDS = {"MOT": "F", "VYR": "M"}                                                       # Lithuanian moteris, vyras
+
+
+def _sex(text: str) -> str | None:
+    """The sex as M, F or X. Cards print it in the national language and in English ("K/F", "M/M", "Α/M"): the English
+    letter is the one after the stroke. A single national letter is translated where it can mean only one thing."""
+    t = str(text).strip().upper()
+    m = re.fullmatch(r"\W?\w\s*/\s*([MFX])", t)
+    if m:
+        return m[1]
+    return _SEX_LETTERS.get(t) if len(t) == 1 else _SEX_WORDS.get(t)
+
+
+_PURE_DATE = re.compile(r"\s*\d{1,2}\s*[ ./\-]\s*\d{1,2}\s*[ ./\-]\s*\d{4}\s*")
+_NAME_LINE = re.compile(r"[A-Za-zÀ-ɏ][A-Za-zÀ-ɏ' \-]+")
+
+
+def _by_layout(page: _Page, doc: dict, scores: dict, today: date) -> None:
+    """The EU uniform-format card puts every field in the same place, whatever language its labels are in, and the small
+    labels are the part most often misread. So what the labels did not give is taken from the layout: the date of birth is
+    the first date on the card; on its row, to the left, stand the sex and the three-letter nationality; the next date below
+    is the card's expiry; the two lines above that row's labels are the forenames and, above them, the surname."""
+    dates = [l for l in page.lines if _PURE_DATE.fullmatch(str(l["text"])) and parse_date(l["text"])]
+    # A date read in pieces ("11 03" and "1990", or three boxes): the pieces of one row are put together again.
+    pieces = sorted((l for l in page.lines if re.fullmatch(r"[\d ./\-]+", str(l["text"]).strip()) and l not in dates
+                     and len(re.sub(r"\D", "", str(l["text"]))) <= 6), key=lambda l: (l["_b"][1], l["_b"][0]))
+    while pieces:
+        first = pieces[0]
+        tall = max(1.0, first["_b"][3] - first["_b"][1])
+        group = sorted((l for l in pieces if abs(l["_b"][1] - first["_b"][1]) <= 0.5 * tall), key=lambda l: l["_b"][0])
+        pieces = [l for l in pieces if not any(l is g for g in group)]
+        text = " ".join(str(l["text"]).strip() for l in group)
+        if len(group) > 1 and _PURE_DATE.fullmatch(text) and parse_date(text):
+            box = (min(l["_b"][0] for l in group), min(l["_b"][1] for l in group), max(l["_b"][2] for l in group), max(l["_b"][3] for l in group))
+            dates.append({"text": text, "score": min(float(l.get("score") or 0.0) for l in group), "image": group[0].get("image"),
+                          "_b": box, "_p": text})
+    dates.sort(key=lambda l: l["_b"][1])
+    if not dates:
+        return
+    anchor = dates[0]
+    born = parse_date(anchor["text"], False, True, today)
+    if not born or born > today.isoformat():
+        return
+    x0, y0, x1, y1 = anchor["_b"]
+    h, mid = max(1.0, y1 - y0), (y0 + y1) / 2
+
+    def put(field: str, value, line: dict) -> None:
+        doc[field] = value
+        scores[field] = float(line.get("score") or 0.0)
+
+    if not doc.get("birthDate"):
+        put("birthDate", born, anchor)
+    if not doc.get("expiryDate"):
+        later = [l for l in dates[1:] if l["_b"][1] > y0 + 0.5 * h and (parse_date(l["text"]) or "") > born]
+        if later:
+            put("expiryDate", parse_date(later[0]["text"]), later[0])
+    row = [l for l in page.lines if l is not anchor and l not in page.labels and l["_b"][2] <= x0 + 0.5 * h
+           and abs((l["_b"][1] + l["_b"][3]) / 2 - mid) <= 0.5 * h]
+    for l in sorted(row, key=lambda l: abs((l["_b"][1] + l["_b"][3]) / 2 - mid)):
+        text = str(l["text"]).strip()
+        if not doc.get("nationality") and re.fullmatch(r"[A-Z]{3}", text) and not _sex(text):
+            put("nationality", text, l)
+        elif not doc.get("sex") and _sex(text):
+            put("sex", _sex(text), l)
+    looks: list[dict] = []
+    if not doc.get("nationality"):
+        # a code read with a letter too many or too few ("GGBR"): that spot is read again on its own, enlarged
+        near = [l for l in row if re.fullmatch(r"[A-Z]{2,5}", str(l["text"]).strip()) and not _sex(str(l["text"]))]
+        if near:
+            b = near[0]["_b"]
+            looks.append({"field": "nationality", "image": int(anchor.get("image") or 0),
+                          "box": [b[0] - 0.5 * h, b[1] - 0.4 * h, b[2] + 0.5 * h, b[3] + 0.4 * h]})
+    doc["_lookAgain"] = looks
+    if not row:
+        return
+    # Names: the nearest lines of letters above this row's labels, in the same column. The surname is printed in capitals,
+    # the forenames in mixed case, on one line or two.
+    left = min(l["_b"][0] for l in row)
+    above = [l for l in page.lines if l["_b"][3] <= y0 - 0.6 * h and l["_b"][1] >= y0 - 12 * h and left - 8 * h <= l["_b"][0] <= left + 2 * h
+             and _NAME_LINE.fullmatch(str(l["text"]).strip()) and l not in page.labels]
+    above.sort(key=lambda l: -l["_b"][1])                     # nearest first
+    if not above:
+        return
+    first = str(above[0]["text"]).strip()
+    words = first.split()
+    caps = [w for w in words if w.isupper()]
+    if caps and len(caps) < len(words) and words[:len(caps)] == caps:          # "SURNAME Forenames" on one line
+        surname, given, s_line, g_line = " ".join(caps), " ".join(words[len(caps):]), above[0], above[0]
+    elif len(above) > 1 and above[0]["_b"][1] - above[1]["_b"][3] <= 1.5 * h:
+        surname, given, s_line, g_line = str(above[1]["text"]).strip(), first, above[1], above[0]
+    else:
+        surname, given, s_line, g_line = first, None, above[0], None
+    if not surname.isupper() and doc.get("surname"):
+        return                                 # the line above is not a surname in capitals: keep what the label gave
+    # A long surname runs over two lines: a line of capitals directly above belongs to it.
+    higher = [l for l in above if l["_b"][3] <= s_line["_b"][1] + 0.3 * h]
+    if higher and str(higher[0]["text"]).strip().isupper() and "/" not in str(higher[0]["text"]) \
+            and s_line["_b"][1] - higher[0]["_b"][3] <= 0.8 * h:
+        surname = str(higher[0]["text"]).strip() + " " + surname
+    put("surname", surname.upper().strip("* "), s_line)
+    if given:
+        put("givenNames", given.upper(), g_line)
+    elif "givenNames" in doc and doc.get("givenNames") == doc.get("surname"):
+        doc.pop("givenNames")
+    if not doc.get("sex"):
+        # The sex is one letter at the start of this row, under the names' left edge, and one letter is easily missed on a
+        # whole page. Say where it is: the reader looks at that spot again, enlarged (pipeline, _look_again).
+        column = s_line["_b"][0]
+        right = min((l["_b"][0] for l in row if l["_b"][0] > column + 1.5 * h), default=column + 6 * h)
+        looks.append({"field": "sex", "image": int(anchor.get("image") or 0),
+                      "box": [column - 0.6 * h, mid - 0.9 * h, right - 0.2 * h, mid + 0.9 * h]})
 
 
 def _uk_name(page: _Page, which: int) -> tuple[str, dict] | None:

@@ -33,6 +33,8 @@ MESSAGES = {
                     "photo, the printed details and the two long lines of letters and '<' at the bottom.",
     "not_a_passport": "This is not the photo page of a passport. Take a photo of the passport page that shows your photo and "
                       "has two long lines of letters and '<' at the bottom.",
+    "mrz_cut_off": "The two long lines of letters and '<' at the bottom of the document are not fully inside the photo. Take "
+                   "the photo again from a little further away, with both lines complete from the first character to the last.",
     "too_small": "The image is too small to read. Move closer so the document fills the frame, and take the photo again.",
     "low_contrast": "The print is too faint to read in this photo. Use better light and a plain, darker background, and take "
                     "the photo again.",

@@ -473,6 +473,38 @@ class PaddleOcrEngine:
         with self._infer:
             return self._extract(images, np, Image, ImageOps, deep)
 
+    def read_region(self, image: bytes, box: list[float], enlarge: float = 3.0) -> list[tuple[str, float]]:
+        """Read one small part of a page again, enlarged. A single printed letter (the sex on a card) is often too small for
+        the text finder on the whole page; on its own, enlarged, it is found. Returns (text, score) for what was read there."""
+        import numpy as np  # noqa: WPS433
+        from PIL import Image, ImageOps  # noqa: WPS433
+        shared = self._shared_reader()
+        if shared is None:
+            return []
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(image))).convert("RGB")
+        x0, y0, x1, y1 = (int(round(v)) for v in box)
+        x0, y0, x1, y1 = max(0, x0), max(0, y0), min(img.width, x1), min(img.height, y1)
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            return []
+        part = img.crop((x0, y0, x1, y1))
+        part = part.resize((max(1, int(part.width * enlarge)), max(1, int(part.height * enlarge))), Image.LANCZOS)
+        page = Image.new("RGB", (part.width + 80, part.height + 80), "white")       # room round it, as on a page
+        page.paste(part, (40, 40))
+        with self._infer, timing.step("paddle.lookAgain"):
+            kept, crops = shared[0]._detect(np.array(page))
+            if not crops:
+                return []
+            results = list(shared[0].recognisers["en"].predict(crops)) if "en" in shared[0].recognisers else []
+        out = []
+        for res in results:
+            d = _result_dict(res)
+            text, score = d.get("rec_text", ""), d.get("rec_score")
+            text = str(text[0] if isinstance(text, (list, tuple)) and text else text).strip()
+            score = score[0] if isinstance(score, (list, tuple)) and score else score
+            if text:
+                out.append((text, float(score or 0.0)))
+        return out
+
     def mrz_retries(self, images: list[bytes], straighten: bool = True) -> tuple[list[str] | None, float | None]:
         """The last-chance MRZ searches on their own, for a page already read with deep=False. straighten=False leaves out
         the slowest one (the page straightened and read again several ways), for a page that shows no trace of an MRZ."""
@@ -616,7 +648,15 @@ class PaddleOcrEngine:
         if mrz:
             mrz_conf = _mrz_score(mrz, [l["text"] for l in lines], [l["score"] or 0 for l in lines])
         on_page = bool(mrz)
-        if "en" in self.langs and not check_score(mrz)[1]:
+        cut = False
+        if not check_score(mrz)[1]:
+            try:        # an MRZ that runs out of the photo: nothing more can be read, so no second or third look
+                from ..mrz import cut_off
+                cut = cut_off(lines, [(im.shape[1], im.shape[0]) if hasattr(im, "shape") else
+                                      ImageOps.exif_transpose(Image.open(io.BytesIO(im))).size for im in images])
+            except Exception:  # noqa: BLE001
+                cut = False
+        if "en" in self.langs and not check_score(mrz)[1] and not cut:
             # nothing found, or a reading with a failing check digit: read the strip around the MRZ again, enlarged
             with timing.step("paddle.loadSecondReader"):
                 en_reader = readers.get("en") or self._reader("en")
@@ -624,7 +664,7 @@ class PaddleOcrEngine:
                 again, again_conf = self._mrz_around_anchor(images, lines, en_reader, np, Image, ImageOps)
             if again and check_score(again)[1]:        # only a reading whose every check digit passes replaces what was read
                 mrz, mrz_conf = again, again_conf
-        if deep and "en" in self.langs and not on_page and not check_score(mrz)[1]:
+        if deep and "en" in self.langs and not on_page and not check_score(mrz)[1] and not cut:
             en_reader = readers.get("en") or self._reader("en")
             band, band_conf = self._mrz_from_bottom_band(images, en_reader, np, Image, ImageOps)
             if band and check_score(band)[0] > check_score(mrz)[0]:

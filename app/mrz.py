@@ -146,7 +146,11 @@ def _repair_by_check_digit(data: str, chk: str) -> str | None:
     if len(found) == 1:
         return found.pop()
     if found:
-        return None
+        # Several single changes satisfy the check digit (the same digit stands in several places of equal weight). A
+        # document number that carries a letter carries it at the front: when exactly one candidate is "letters, then
+        # digits", that one is taken. It is still reported as a repair, for a person to confirm.
+        leading = [c for c in found if re.fullmatch(r"[A-Z]{1,2}\d+<*", c)]
+        return leading[0] if len(leading) == 1 else None
     for a in range(len(slots)):
         for b in range(a + 1, len(slots)):
             (i, ai), (j, aj) = slots[a], slots[b]
@@ -613,6 +617,29 @@ def second_mrz(texts: list[str], known: list[str] | None) -> list[str] | None:
         return None
     other = find_mrz_lines(rest)
     return other if other and plausible_reading(other) and not same_zone(other, known) else None
+
+
+def cut_off(text_lines: list[dict], sizes: list[tuple[int, int]]) -> bool:
+    """True when the photo cuts the MRZ off: an MRZ line that runs into the left or right edge of the photo and is shorter
+    than any MRZ line is, or a single MRZ name line at the very bottom of the photo with its second line outside the frame.
+    sizes: (width, height) of each image, in the order the lines' "image" numbers refer to."""
+    found = []
+    for l in text_lines or []:
+        text = clean_line(str(l.get("text", "")))
+        box = l.get("box") or []
+        if len(text) >= 28 and text.count(FILLER) >= 2 and re.fullmatch(r"[A-Z0-9<]+", text) and len(box) == 4:
+            found.append((text, [p[0] for p in box], [p[1] for p in box], int(l.get("image") or 0)))
+    for text, xs, ys, index in found:
+        if not 0 <= index < len(sizes):
+            continue
+        width, height = sizes[index]
+        at_side = min(xs) <= 0.015 * width or max(xs) >= 0.985 * width
+        if at_side and len(text) not in (30, 36, 44):
+            return True
+        others = [f for f in found if f[3] == index and f[0] != text]
+        if not others and max(ys) >= 0.975 * height and re.match(r"[PVIAC][A-Z<][A-Z]{3}", text):
+            return True
+    return False
 
 
 def check_score(lines: list[str] | None) -> tuple[int, bool]:
