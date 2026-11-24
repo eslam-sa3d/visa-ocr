@@ -60,9 +60,13 @@ BEFORE YOU START
      tar -xzf tools.tar.gz && python tools/system_test.py --url https://<host> --key <full key> --key2 <second full key>
 
 6. MEASURE  (before go-live; results go into GO_LIVE_RECORD.md)
-     python tools/perf_test.py --url https://<host> --key <portal key> --phase load --levels 1,2,4,8 --n 40
-   Size the number of containers and JOB_THREADS from the result, and set OCR_DEADLINE_SECONDS from the read times you
-   see with your own sample images. Every timing known so far is from a laptop.
+   From a workstation with Python 3 and "requests", with a folder of your own sample photos of documents:
+     tar -xzf tools.tar.gz
+     python tools/capacity_test.py --url https://<host> --key <portal key> --images <folder> --levels 1,4,16,64
+   It prints, for each number of clients uploading at once: documents read a minute, the median wait and the wait 95 in
+   100 uploads stay within. "per minute" stops rising at the service's capacity. Size the servers so that the expected
+   uploads a minute at peak are about 60% of it (docs/SERVER_SIZING.md in docs.tar.gz has the arithmetic). GET /readyz
+   shows how many readers each container started. Every figure known so far is from a 2-core test machine and a laptop.
 
 7. OPERATE
    Logs      docker logs visa-ocr            application log; holds no document data

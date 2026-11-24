@@ -569,13 +569,17 @@ def plausible_reading(lines: list[str] | None) -> bool:
     """False when lines of the right length are almost certainly not an MRZ. Printed text on the front of a card can come out
     as two or three lines of the right length with a stray '<' in them. A real MRZ, even a badly read one, starts with a document
     type letter and has dates where dates belong. Rejected: a wrong type letter with at most one check digit passing (one in
-    ten random lines passes a check by chance), and no check digit passing with neither date readable."""
+    ten random lines passes a check by chance), no check digit passing with neither date readable, and a line of dates with
+    hardly a digit in it."""
     if not lines:
         return False
     try:
         parsed = parse_mrz(lines)
     except MrzError:
         return False
+    dates_line = clean_line(lines[1])
+    if sum(c.isdigit() for c in dates_line) < 6:
+        return False            # the name line read twice: the line with the dates has a dozen digits on any document
     passing = sum(parsed.checks.values())
     type_ok = lines[0].strip()[:1] in _TYPE_LETTERS.get(parsed.format, "")
     if not type_ok and passing <= 1:

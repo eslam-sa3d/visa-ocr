@@ -1671,3 +1671,34 @@ def test_letter_o_at_the_front_of_a_number_is_restored_by_its_check_digit():
     typed = analyse_mrz(lines)
     apply_mrz_policy(typed, 0.99, [], Applicant(document_number="O760280"), mrz_lines=lines)
     assert typed["document"]["checks"]["document_number"] is True
+
+
+def test_a_name_line_read_twice_is_not_a_second_document():
+    from app.mrz import plausible_reading
+    name = "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<"
+    assert not plausible_reading([name, name])
+    assert plausible_reading([name, "L898902C36UTO7408122F1204159ZE184226B<<<<<10"])
+
+
+@pytest.mark.fastfirst
+def test_quick_look_reading_is_used_when_paddle_fails_a_check_digit(monkeypatch):
+    """The quick look read every check digit correctly but its two readers differed on the name, so PaddleOCR read the page;
+    PaddleOCR then misread one character of the number. The reading the check digits prove is the one returned."""
+    from app import engines
+    from app.engines.base import EngineOutput
+    good = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+    bad = [good[0], "L898902C86UTO7408122F1204159ZE184226B<<<<<10"]
+    pair_calls = []
+
+    class Paddle:
+        def extract(self, images, hint, deep=True):
+            return EngineOutput(engine="paddle-ocr", mrz_lines=bad, mrz_confidence=0.99, fields={"textLines": [{"text": "x"}]})
+
+    class Pair:
+        def extract(self, images, hint):
+            pair_calls.append(1)
+            return EngineOutput(engine="ensemble", mrz_lines=good, fields={"readers": {"agree": False}})
+
+    monkeypatch.setattr(engines, "get_engine_by_name", lambda name: Paddle() if name == "paddle-ocr" else Pair())
+    out = engines.AutoEngine().extract([b"x"], None)
+    assert out.engine == "ensemble" and out.mrz_lines == good and len(pair_calls) == 1

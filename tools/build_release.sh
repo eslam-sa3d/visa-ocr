@@ -43,7 +43,7 @@ sed -e "s/<commit>/$BUILD/g" docs/GO_LIVE_RECORD.md > "$OUT/GO_LIVE_RECORD.md"
 tar czf "$OUT/docs.tar.gz" --exclude='.DS_Store' docs
 find app -type f \( -name '*.py' -o -path 'app/static/*' \) -not -path '*/__pycache__/*' > "$OUT/.list"
 ls config/* tools/system_test.py tools/perf_test.py tools/load_test.py tools/suggest_deadline.py tools/accuracy_matrix.py \
-   tools/accuracy_real.py tools/read_folder.py tools/make_scenarios.py tools/make_checksums.py tools/specimens.py \
+   tools/accuracy_real.py tools/capacity_test.py tools/read_folder.py tools/make_scenarios.py tools/make_checksums.py tools/specimens.py \
    requirements-lite.txt requirements-dev.txt VERSION 2>/dev/null >> "$OUT/.list"
 tar czf "$OUT/tools.tar.gz" -T "$OUT/.list"; rm -f "$OUT/.list"
 {

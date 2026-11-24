@@ -142,6 +142,12 @@ class AutoEngine:
         from .. import config
         from ..mrz import check_score as score
         threshold = config.min_confidence_unprotected()
+        # The quick look read this same MRZ with every check digit passing and PaddleOCR did not (one character of the number
+        # misread): the reading the check digits prove is the one to use. Its name line is still for a person to confirm.
+        if seen is not None and seen.mrz_lines and score(seen.mrz_lines)[1] and not score(out.mrz_lines)[1]:
+            from ..mrz import same_zone as same
+            if same(seen.mrz_lines, out.mrz_lines):
+                return seen
         if out.mrz_confidence is not None and out.mrz_confidence >= threshold:
             return out
         # The quick look at the start already read the strip with the other readers. The same lines from them, with every
