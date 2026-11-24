@@ -7,9 +7,10 @@ WHAT THIS IS
   on its data volume); PostgreSQL is optional for several servers sharing one queue.
 
 BEFORE YOU START
-  [ ] Linux server, Intel/AMD 64-bit, Docker with the compose plugin. Each container is limited to 1 CPU core
-      and 2 GB RAM (production/docker-compose.yml) and reads about 8 documents a minute at those limits. For more
-      throughput run more containers behind the load balancer with a shared PostgreSQL queue (DATABASE_URL).
+  [ ] Linux server, Intel/AMD 64-bit, Docker with the compose plugin. The service sizes itself to its container:
+      one reader for each CPU core, as long as each has about 2 GB RAM (6 cores and 18 GB -> 6 readers). Measured on a
+      2-core test machine with generated documents: about 17 documents a minute for each core. GET /readyz shows the
+      number of readers chosen.
   [ ] The server does NOT need internet access.
   [ ] Only the portal's servers should be able to reach this service. Do not expose it to the internet.
   [ ] A TLS certificate and key for the service's host name, from your organisation's CA.
@@ -76,7 +77,9 @@ BEFORE YOU START
    Backup    Back up nothing from the data volume except /data/training if you want to keep corrections beyond a server
              loss. Keep /etc/visa-ocr in your secret store.
    Update    Load the new image, set the new IMAGE_TAG, `docker compose up -d`. To go back, use the old tag.
-   Scale     Run more containers behind your load balancer; for a shared queue set DATABASE_URL to a PostgreSQL database.
+   Scale     Give the container more cores and memory: it starts more readers by itself at the next start. Beyond one
+             server, run more containers behind your load balancer and set DATABASE_URL to a PostgreSQL database, so they
+             share one queue (tested: an upload sent to one container is read and answered through another).
 
 FOR THE PORTAL TEAM
   When the applicant should take the photo again, the response carries a "retake" block. Show retake.message to the
@@ -84,8 +87,9 @@ FOR THE PORTAL TEAM
     - on the upload call itself: HTTP 422 with detail.code image_unclear and detail.retake, when the photo is plainly
       unusable (blurred, dark, washed out, too small). Answered at once, whatever the load; no job is created.
     - in error.retake when the job failed (codes image_unclear, mrz_not_found and multiple_documents).
-    - in result.retake when a document was read but a check digit fails.
-  A reading whose check digits all pass never carries it.
+    - in result.retake when a document was read but a check digit fails, or when a passport's page is cut off in the
+      photo (flag page_cut_off: the reading is returned, a person reviews it, the applicant is asked for the whole page).
+  A reading whose check digits all pass carries it only when the passport page is cut off.
   POST /v1/documents/check answers at once whether a photo is clear enough, before it is sent for reading.
   Send the applicant's form data with each upload: it confirms the name and nationality, which no check digit covers.
   Examples: docs/API_EXAMPLES.md in docs.tar.gz.

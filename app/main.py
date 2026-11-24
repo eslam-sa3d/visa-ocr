@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import audit, config, crypto, pipeline, security, worker, quality
+from . import audit, config, crypto, pipeline, readers, security, worker, quality
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
@@ -63,8 +63,10 @@ async def lifespan(_app):
 
     hk = threading.Thread(target=housekeeping, daemon=True)
     hk.start()
+    readers.start()               # the readers load now, not on the first applicant's upload
     yield
     stop.set()
+    readers.stop()
     # Jobs still waiting or running in this process cannot finish after it stops. Say so in the store (it may outlive the
     # process), so a caller polling for the result gets an answer instead of "queued" until the job expires.
     with _inflight_lock:
@@ -200,7 +202,7 @@ def readyz() -> dict:
     if (training.enabled or config.job_db_path() or config.database_url()) and not (crypto.enabled() or config.storage_encrypted()):
         warnings.append("stored personal data is not encrypted: set DATA_KEY_FILE so the service encrypts it, or put the job "
                         "database and the training store on encrypted volumes and set DATA_AT_REST_ENCRYPTED=1")
-    out = {"status": "ready", "authEnabled": security.auth_enabled()}
+    out = {"status": "ready", "authEnabled": security.auth_enabled(), "readers": readers.count()}
     if warnings:
         out["warnings"] = warnings
     return out

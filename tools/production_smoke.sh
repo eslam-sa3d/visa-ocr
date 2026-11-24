@@ -4,7 +4,7 @@
 #   tools/production_smoke.sh visa-ocr:TAG path/to/a_passport.jpg
 # It makes throw-away keys and a throw-away certificate in a temporary folder and removes them at the end.
 # Checks: the service is ready; no key is refused; the portal key reads a document; the portal key may not list models;
-# a blank photo is turned back with a retake message; the stored result is encrypted; the audit log has lines.
+# two reader processes start and one of them reads the document; a blank photo is turned back with a retake message; the stored result is encrypted; the audit log has lines.
 set -eu
 IMAGE="${1:?image name}"; SAMPLE="${2:?a JPEG or PNG of a document}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -22,7 +22,7 @@ docker run -d --name "$NAME" --network none --read-only --tmpfs /tmp --cap-drop 
   -v "$(cd "$(dirname "$SAMPLE")" && pwd)/$(basename "$SAMPLE"):/tmp/sample:ro" \
   -e PRODUCTION=1 -e API_KEYS_FILE=/etc/visa-ocr/keys.json -e DATA_KEY_FILE=/etc/visa-ocr/data.key -e DATA_CIPHER=aes256gcm \
   -e JOB_DB_PATH=/data/jobs.db -e TLS_CERT=/etc/visa-ocr/tls/server.crt -e TLS_KEY=/etc/visa-ocr/tls/server.key \
-  -e AUDIT_LOG_FILE=/var/log/visa-ocr/audit.log -e RATE_LIMIT_PER_MIN=0 -e TRAINING_STORE_DIR=/data/training "$IMAGE" >/dev/null
+  -e AUDIT_LOG_FILE=/var/log/visa-ocr/audit.log -e RATE_LIMIT_PER_MIN=0 -e TRAINING_STORE_DIR=/data/training -e READER_PROCESSES=2 "$IMAGE" >/dev/null
 OUT="$(docker exec -i -e PORTAL_KEY="$PORTAL_KEY" "$NAME" python - <<'PY'
 import io, json, os, sqlite3, ssl, time, urllib.error, urllib.request, uuid
 from PIL import Image
@@ -53,7 +53,7 @@ def read(image):
     if status == 422 and (j.get("detail") or {}).get("code") == "image_unclear":
         return {"status": "failed", "error": j["detail"], "refusedAtUpload": True}     # refused at once, no job
     assert status == 202, f"upload gave {status}"
-    for _ in range(180):
+    for _ in range(420):
         j = call("/v1/jobs/" + j["jobId"], headers=key)[1]
         if j.get("status") in ("done", "failed"): return j
         time.sleep(1)
@@ -71,9 +71,10 @@ rows = sqlite3.connect("/data/jobs.db").execute("select * from jobs").fetchall()
 sealed = any(str(c).startswith("VOENC") for r in rows for c in r)
 plain = any((done.get("result") or {}).get("document", {}).get("documentNumber", "\0") in str(c) for r in rows for c in r)
 audit = sum(1 for _ in open("/var/log/visa-ocr/audit.log"))
-print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| blank photo:", (turned_back.get("error") or {}).get("code"),
+readers = call("/readyz")[1].get("readers")
+print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| blank photo:", (turned_back.get("error") or {}).get("code"),
       "| retake message:", bool(retake), "| stored encrypted:", sealed and not plain, "| audit lines:", audit)
-ok = done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
+ok = readers == 2 and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
 raise SystemExit(0 if ok else "FAIL: see the line above")
 PY
 )"

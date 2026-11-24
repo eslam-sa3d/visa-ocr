@@ -4,6 +4,7 @@
 # Never use this mode on a server or with documents that must stay private beyond this Mac.
 cd "$(dirname "$0")"
 export PRODUCTION=0 OCR_ENGINE=auto RATE_LIMIT_PER_MIN=0
+export READER_PROCESSES=1        # one reader is enough for a test; without this the service starts one per core
 export JOB_DB_PATH="$PWD/.local/jobs.db" TRAINING_STORE_DIR="$PWD/.local/training"
 mkdir -p .local
 lsof -ti tcp:8080 | xargs kill 2>/dev/null

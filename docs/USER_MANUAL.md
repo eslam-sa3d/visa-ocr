@@ -170,7 +170,14 @@ Results are deleted after 60 minutes (`JOB_TTL_MINUTES`). Store what you need in
 | `RATE_LIMIT_PER_MIN` | 60 | Per client. 0 turns it off |
 | `MAX_UPLOAD_BYTES` | 10 MB | Per image |
 | `JOB_TTL_MINUTES` | 60 | How long results are kept |
-| `JOB_THREADS` | half the cores | Jobs read at the same time in one container (no PostgreSQL queue) |
+| `READER_PROCESSES` | one per core, 2 GB each | Documents read at the same time. Unset: the service reads the container's own core and memory limits at start-up and starts that many readers (each a separate process with its own copy of the models). `/readyz` shows the number. Set a number to force it |
+| `READER_MEMORY_GB` | 2 | Memory counted for each reader when the number is worked out |
+| `JOB_THREADS` | the number of readers | Jobs handled at the same time in one container (no PostgreSQL queue) |
+| `WARM_UP` | 1 | Load the readers at start-up, so the first upload does not wait for them. 0 = load on the first upload |
+| `PADDLE_ONE_LANGUAGE` | 1 | Read each text box in English first and in the other languages only where English scored under `PADDLE_ONE_LANGUAGE_SCORE` (0.95). 0 = every box in every language |
+| `OCR_SECOND_CARD_SECONDS` | 3 | Time for the second reading of a card with a missing field (its first pass always runs). 0 = no limit |
+| `PAGE_CUT_OFF_RATIO` | 3 | A passport photo with less page above the MRZ than this many times the MRZ's own height is flagged `page_cut_off`. 0 = no check |
+| `UPLOAD_CLARITY_CHECK` | 1 | Refuse a plainly unusable photo on the upload call itself (HTTP 422). 0 = a job that fails |
 | `OCR_TEXT_SECONDS` | 20 | Time limit for reading a card without an MRZ when `OCR_DEADLINE_SECONDS` is 0 |
 | `WORKER_POLL_SECONDS` | 0.2 | How often an idle worker checks the PostgreSQL queue |
 | `API_DOCS` | off | Set to 1 to serve `/docs` and `/openapi.json` (they need no key; keep off in production) |
@@ -201,13 +208,14 @@ Line crops and label files made for a training run are deleted when the run ends
 | Container exits: `... is a directory, not a file` | A mounted certificate path does not exist on the host | Mount the folder that holds `server.crt` and `server.key` |
 | `415 type_mismatch` or `bad_type` | The file is not a real JPEG or PNG | Convert it (HEIC and PDF are not accepted) |
 | `413 too_large` | Image over 10 MB | Reduce it or raise `MAX_UPLOAD_BYTES` |
-| `503 busy` | Too many jobs waiting | With PostgreSQL: add workers or raise `MAX_PENDING_JOBS`. One container: raise `JOB_THREADS` if cores are free, otherwise wait |
+| `503 busy` | Too many jobs waiting | With PostgreSQL: add workers or raise `MAX_PENDING_JOBS`. One container: give it more cores and memory (it starts more readers), or raise `MAX_PENDING_JOBS` (default: 32 for each reader) |
 | Service does not start: `contains no usable key` | `API_KEYS` holds only commas or spaces | Set a real key. A blank value no longer turns authentication off |
 | Correction refused with `409` | The training data for that job was purged | Nothing to do: purged data is not written back |
 | `429 rate_limited` | More than `RATE_LIMIT_PER_MIN` requests from one client | Raise the limit or set it to 0 behind the portal |
 | `mrz_not_found` | No MRZ visible, or blurred, cut off or sideways | Retake the photo; for cards without an MRZ choose "Iqama / GCC ID" |
 | `image_unclear` | The photo is blurred, too dark, washed out, too small or blank | Show `error.retake.message` to the applicant and ask for another photo. Thresholds: `QUALITY_<NAME>` (see `app/config.py`); `IMAGE_QUALITY_CHECK=0` turns the check off. A plainly unusable photo is refused on the upload call itself with HTTP 422 and the same code and `retake` block (in `detail`); `UPLOAD_CLARITY_CHECK=0` goes back to a job that fails |
 | `multiple_documents` | The photo shows more than one document with machine-readable lines (two passports, or a passport open at a visa) | Show `error.retake.message` to the applicant and ask for a photo of one document |
+| Flag `page_cut_off`, result carries `retake` | A passport's MRZ was read, but most of the page above it is outside the photo | Show `result.retake.message` to the applicant; the reading is there for the reviewer. `PAGE_CUT_OFF_RATIO=0` turns the check off |
 | Result carries `retake` | An MRZ check digit fails, or a card's ID number could not be read | Show `result.retake.message` to the applicant; the reading is still there for the reviewer |
 | `/readyz` answers `not_ready ... is missing` | `OCR_ENGINE=paddle-ocr` without model files | Fetch the models, or use `ensemble` |
 | `/readyz` shows a `warnings` list | `auto` is running on the fallback readers | Fine for the lite image; fetch models for PaddleOCR |
@@ -229,7 +237,7 @@ Line crops and label files made for a training run are deleted when the run ends
 | `DATA_AT_REST_ENCRYPTED` | off | Set to 1 once the job database and training store are on encrypted volumes; removes the `/readyz` warning. |
 
 - A correction is answered with `"status": "pending"`. It is used for training only after approval (docs/MODEL_TRAINING.md).
-- `OCR_CONCURRENCY` no longer has an effect: PaddleOCR reads one document at a time per process. Run more worker processes for more throughput.
+- `OCR_CONCURRENCY` no longer has an effect: PaddleOCR reads one document at a time per process. The service starts one reader process for each core by itself (`READER_PROCESSES`).
 - If one of the two readers fails on a document, the other one's reading is used and the result lists the failed reader under `readers.failed`; it goes to review like any single reading.
 - When the two readers differ only in the optional data (for example 6 or G) and the printed page shows the value as one of them read it, that value is used and nothing is left unconfirmed.
 - A Hijri expiry date is converted approximately. More than 3 days past is `document_expired`; more than 3 days ahead is noted (`expiry_hijri_converted`) with the converted date in `expiryDateGregorianApprox`; anything closer still needs a person (`expiry_hijri_not_checked`).

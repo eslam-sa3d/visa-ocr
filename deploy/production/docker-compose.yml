@@ -24,11 +24,13 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-    deploy:
-      resources:
-        # One worker: 1 core and 2 GB. Load-tested at these limits (24 Nov 2026, generated documents): about 8 documents a
-        # minute, memory peak 1.6 GB with 16 clients queued. For more throughput run more containers, not a bigger one.
-        limits: {cpus: "1", memory: 2g}
+    # No limits are set here: the service sizes itself to whatever this container is given. At start-up it reads the
+    # container's processor and memory limits and starts one reader for each core, as long as each has about 2 GB.
+    # To hold it to a share of the server, set limits below; the service follows them. READER_PROCESSES in visa-ocr.env
+    # forces a number of readers.
+    #deploy:
+    #  resources:
+    #    limits: {cpus: "6", memory: 18g}
 # The service never calls out. Block outbound traffic from this host at the firewall as well.
 volumes:
   visa-ocr-data:

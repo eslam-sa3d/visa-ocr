@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 from typing import Callable
 
-from . import config, pipeline
+from . import config, pipeline, readers
 from .engines import EngineUnavailable, get_engine
 from .review import Applicant
 
@@ -15,6 +15,17 @@ log = logging.getLogger("visa-ocr")
 
 
 def _run(job_id: str, images: list[bytes], hint: str | None, applicant: Applicant, engine_getter: Callable) -> tuple[str, dict]:
+    """Read one document: in a reader process when the service runs several, else here."""
+    if readers.active():
+        try:
+            return readers.read(job_id, images, hint, asdict(applicant), config.job_max_seconds())
+        except Exception as exc:  # noqa: BLE001 - type only: an error text can repeat a value from the document
+            log.error("job %s failed in its reader process: %s", job_id, type(exc).__name__)
+            return "failed", {"code": "internal_error", "message": "Processing failed"}
+    return run_here(job_id, images, hint, applicant, engine_getter)
+
+
+def run_here(job_id: str, images: list[bytes], hint: str | None, applicant: Applicant, engine_getter: Callable) -> tuple[str, dict]:
     try:
         return pipeline.run(images, hint, applicant, engine_getter())
     except EngineUnavailable as exc:

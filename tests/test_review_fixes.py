@@ -876,6 +876,7 @@ def _shared_paddle(monkeypatch, calls, det_fail=False, rec_short=False):
 
 def test_shared_detection_finds_text_once_and_reads_it_per_language(tmp_path, monkeypatch):
     """P-02: with two languages the page is searched for text once, not twice, and the result is the same."""
+    monkeypatch.setenv("PADDLE_ONE_LANGUAGE", "0")       # this test is about every language reading every box
     calls = []
     _shared_paddle(monkeypatch, calls)
     reg = registry_with_models(tmp_path)
@@ -1498,3 +1499,57 @@ def test_one_document_read_twice_differently_is_still_one_document():
     assert not same_zone(visa, good) and second_mrz(good + visa, good) == visa
     other = ["P<D<<MUSTERMANN<<ERIKA<<<<<<<<<<<<<<<<<<<<<<", "C01X00T478D<<6408125F2702283<<<<<<<<<<<<<<<4"]
     assert not same_zone(other, good)
+
+
+def test_passport_with_most_of_the_page_outside_the_photo_is_flagged():
+    """The MRZ is whole and reads, but it sits near the top of the photo: the page above it was cut off. The reading stands,
+    a person reviews it and the applicant is asked for the whole page. A whole page, a visa and a card are left alone."""
+    import io
+    from PIL import Image
+    from app import pipeline
+    from app.engines.base import EngineOutput
+    from app.review import Applicant
+    lines = ["P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "L898902C36UTO7408122F1204159ZE184226B<<<<<10"]
+
+    def read(top):
+        class Reader:
+            name = "paddle-ocr"
+            def extract(self, images, hint):
+                boxes = [{"image": 0, "box": [40, top, 960, top + 28]}, {"image": 0, "box": [40, top + 36, 960, top + 64]}]
+                return EngineOutput(engine=self.name, mrz_lines=lines, mrz_confidence=0.99, fields={"mrzLineBoxes": boxes})
+        b = io.BytesIO(); Image.new("RGB", (1000, 700), "white").save(b, "PNG")
+        status, res = pipeline.run([b.getvalue()], None, Applicant(), Reader())
+        assert status == "done" and all(res["document"]["checks"].values())
+        return res
+    cut = read(top=120)                      # 120 px of page above an MRZ 64 px tall: under twice its height
+    assert "page_cut_off" in [f["code"] for f in cut["flags"]] and cut["needsReview"] and cut["retake"]["reasons"] == ["page_cut_off"]
+    whole = read(top=560)                    # nearly nine times
+    assert "page_cut_off" not in [f["code"] for f in whole["flags"]] and "retake" not in whole
+    assert not pipeline._page_cut_off({"format": "MRVA"}, [{"box": [0, 10, 9, 20]}, {"box": [0, 22, 9, 32]}], [])
+    assert not pipeline._page_cut_off({"format": "TD3"}, None, [])
+
+
+def test_a_box_english_read_well_is_not_read_again_in_arabic(monkeypatch):
+    """Every box is read in English; only the boxes English scored low go to the Arabic recogniser."""
+    from app.engines.paddle_ocr import SharedReader
+
+    class Rec:
+        def __init__(self, answers):
+            self.answers, self.seen = answers, []
+        def predict(self, crops):
+            self.seen.append(list(crops))
+            return [{"rec_text": self.answers[c][0], "rec_score": self.answers[c][1]} for c in crops]
+    en = Rec({"mrz": ("P<UTOERIKSSON<<ANNA", 0.99), "name": ("ANNA MARIA", 0.97), "arabic": ("lJI r+wl", 0.41), "blank": ("", 0.0)})
+    ar = Rec({"arabic": ("الاسم", 0.95), "blank": ("", 0.0)})
+    reader = SharedReader(None, {"en": en, "ar": ar}, None, None)
+    crops = ["mrz", "name", "arabic", "blank"]
+    boxes = [[[0, i * 10], [9, i * 10], [9, i * 10 + 8], [0, i * 10 + 8]] for i in range(4)]
+    out = reader._recognise(boxes, crops, 0)
+    assert ar.seen == [["arabic", "blank"]] and en.seen == [crops]
+    assert sorted((l["lang"], l["text"]) for l in out) == [("ar", "الاسم"), ("en", "ANNA MARIA"), ("en", "P<UTOERIKSSON<<ANNA"), ("en", "lJI r+wl")]
+    monkeypatch.setenv("PADDLE_ONE_LANGUAGE", "0")
+    ar.seen.clear()
+    monkeypatch.setenv("PADDLE_PARALLEL_LANGUAGES", "0")
+    ar.answers.update({"mrz": ("x", 0.1), "name": ("y", 0.1)})
+    reader._recognise(boxes, crops, 0)
+    assert ar.seen == [crops]

@@ -35,3 +35,11 @@ def _no_fast_first(monkeypatch, request):
     tested on its own with @pytest.mark.fastfirst."""
     if "fastfirst" not in request.keywords:
         monkeypatch.setenv("OCR_FAST_FIRST_SECONDS", "0")
+
+
+@pytest.fixture(autouse=True)
+def _one_reader_in_process(monkeypatch):
+    """Tests stand in their own readers and read in the test process. The service would otherwise size itself to this
+    machine and start reader processes of its own, which know nothing of a stand-in. Reader processes have their own test."""
+    monkeypatch.setenv("READER_PROCESSES", "1")
+    monkeypatch.setenv("WARM_UP", "0")

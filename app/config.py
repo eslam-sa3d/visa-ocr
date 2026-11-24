@@ -36,7 +36,9 @@ def ocr_timeout() -> int: return max(1, _int("OCR_TIMEOUT_SECONDS", 60))     # p
 def max_body_bytes() -> int: return max_files() * max_bytes() + 1024 * 1024 # whole multipart request
 def job_ttl_seconds() -> int: return _int("JOB_TTL_MINUTES", 60) * 60       # personal data is deleted after this
 def job_db_path() -> str: return os.environ.get("JOB_DB_PATH", "")          # empty: keep jobs in memory
-def max_pending_jobs() -> int: return _int("MAX_PENDING_JOBS", 32)
+def max_pending_jobs() -> int:                                    # uploads allowed to wait: 32 for each reader unless set
+    from . import readers
+    return _int("MAX_PENDING_JOBS", 32 * readers.count())
 def rate_limit_per_minute() -> int: return _int("RATE_LIMIT_PER_MIN", 60)   # 0 disables
 def trust_proxy() -> bool: return _flag("TRUST_PROXY")
 def ocr_concurrency() -> int: return 1    # kept for callers; PaddleOCR reads one document at a time (predictors are not thread-safe)
@@ -47,14 +49,19 @@ def min_confidence_unprotected() -> float: return _float("MIN_CONFIDENCE_UNPROTE
 def min_confidence_visual() -> float: return _float("MIN_CONFIDENCE_VISUAL", 0.85)
 def visual_zone_auto_accept() -> bool: return _flag("VISUAL_ZONE_AUTO_ACCEPT")                # default: always human review
 def database_url() -> str: return os.environ.get("DATABASE_URL", "")        # postgresql://... enables the PostgreSQL queue
-def worker_threads() -> int: return max(0, _int("WORKER_THREADS", 1))       # in-process workers when using PostgreSQL (0 = API only)
+def worker_threads() -> int:                                                # in-process workers when using PostgreSQL (0 = API only)
+    from . import readers
+    return max(0, _int("WORKER_THREADS", readers.count()))
 def job_stale_seconds() -> int: return max(30, _int("JOB_STALE_SECONDS", 300))   # a claim not renewed for this long is retried
 def job_max_attempts() -> int: return max(1, _int("JOB_MAX_ATTEMPTS", 3))
 def db_statement_timeout_ms() -> int: return max(1000, _int("DB_STATEMENT_TIMEOUT_MS", 15000))
 def worker_poll_seconds() -> float: return min(5.0, max(0.05, _float("WORKER_POLL_SECONDS", 0.2)))   # idle wait between queue checks
 def optional_data_review() -> bool: return _flag("OPTIONAL_DATA_REVIEW")   # force review when only optional data is unconfirmed
 def job_threads() -> int:                                                   # in-process OCR jobs at a time (no PostgreSQL queue)
-    return max(1, _int("JOB_THREADS", max(1, (os.cpu_count() or 2) // 2)))
+    from . import readers                                                   # one job per reader unless set
+    return max(1, _int("JOB_THREADS", readers.count()))
+# Time for the second reading of a card with a missing field. Its first pass always runs; 0 = no limit (every pass).
+def second_card_reader_seconds() -> float: return max(0.0, _float("OCR_SECOND_CARD_SECONDS", 3.0))
 def text_read_seconds() -> float: return max(1.0, _float("OCR_TEXT_SECONDS", 20.0))   # ID-card text reader budget with no deadline
 def max_text_lines() -> int: return max(20, _int("MAX_TEXT_LINES", 250))    # OCR lines parsed per card job
 def job_max_seconds() -> int: return max(30, _int("JOB_MAX_SECONDS", 600))  # a job still running after this is marked failed
@@ -71,6 +78,21 @@ def ui_enabled() -> bool: return _flag("UI_ENABLED", not production())      # th
 def upload_scan_command() -> str: return os.environ.get("UPLOAD_SCAN_COMMAND", "").strip()   # e.g. "clamdscan --no-summary"
 def upload_scan_seconds() -> float: return max(1.0, _float("UPLOAD_SCAN_SECONDS", 20.0))
 def paddle_parallel_languages() -> bool: return _flag("PADDLE_PARALLEL_LANGUAGES", True)   # languages read side by side
+def paddle_cpu_threads() -> int:
+    """Threads the main reader may use. Each reader process is given its share of the cores. A single reader in a small
+    container gets the container's cores (the library would otherwise go by the host's). 0 = the library's own choice."""
+    if "PADDLE_CPU_THREADS" in os.environ:
+        return max(0, _int("PADDLE_CPU_THREADS", 0))
+    from . import readers
+    cores = int(readers.container_cores() + 0.01)
+    return max(1, cores) if readers.count() == 1 and cores <= 4 else 0
+# Read each text box in one language where that is enough: English first, the other languages only for the boxes English
+# scored under PADDLE_ONE_LANGUAGE_SCORE. 0 = read every box in every language, as before.
+def paddle_one_language() -> bool: return _flag("PADDLE_ONE_LANGUAGE", True)
+def paddle_one_language_score() -> float: return min(1.0, max(0.0, _float("PADDLE_ONE_LANGUAGE_SCORE", 0.95)))
+# A passport photo with less page above the MRZ than this many times the height of the MRZ itself is taken as cut off
+# (a whole page has about six times). 0 = no check.
+def page_cut_off_ratio() -> float: return max(0.0, _float("PAGE_CUT_OFF_RATIO", 3.0))
 def paddle_shared_detection() -> bool: return _flag("PADDLE_SHARED_DETECTION", True)   # find text once, read it per language; 0 = one pipeline per language
 def ocr_engine() -> str: return os.environ.get("OCR_ENGINE", "auto")
 def ocr_langs() -> list[str]: return [x.strip() for x in os.environ.get("OCR_LANGS", "en,ar").split(",") if x.strip()]

@@ -92,7 +92,7 @@ def test_missing_dates_are_filled_from_the_second_reader(monkeypatch):
                        {"code": "expiryDate_not_found", "severity": "warning", "message": "x"}]}
     second = {"document": {"birthDate": "1975-05-03", "birthCalendar": "gregorian", "expiryDate": "2029-09-07",
                            "expiryCalendar": "gregorian", "fieldConfidence": {"birthDate": 0.6, "expiryDate": 0.55}}, "flags": []}
-    monkeypatch.setattr("app.engines.tesseract_text.read_text_lines", lambda images: [{"text": "x"}])
+    monkeypatch.setattr("app.engines.tesseract_text.read_text_lines", lambda images, **kw: [{"text": "x"}])
     monkeypatch.setattr(pipeline, "parse_gcc_id", lambda lines: second)
     out = pipeline._fill_from_second_reader(first, [b"x"], "paddle-ocr")
     assert out["document"]["birthDate"] == "1975-05-03" and out["document"]["expiryDate"] == "2029-09-07"

@@ -83,6 +83,22 @@ def _with_retake(result: dict, clarity) -> dict:
     return result
 
 
+def _page_cut_off(doc: dict, boxes, images: list[bytes]) -> bool:
+    """True when a passport's MRZ sits so near the top of the photo that most of the page above it is missing. On a whole
+    passport page the print above the MRZ is about six times as tall as the two MRZ lines together; under
+    PAGE_CUT_OFF_RATIO (3) times, half the page or more is outside the photo. Only passports, only when the place of each
+    MRZ line on the photo is known, and never when the photo was turned to be read."""
+    ratio = config.page_cut_off_ratio()
+    if not ratio or doc.get("format") != "TD3" or not boxes or len(boxes) != 2:
+        return False
+    try:
+        tops, bottoms = [b["box"][1] for b in boxes], [b["box"][3] for b in boxes]
+        zone = max(bottoms) - min(tops)
+        return zone > 0 and min(tops) < ratio * zone
+    except (KeyError, IndexError, TypeError):
+        return False
+
+
 def _fields_out(output: EngineOutput) -> dict:
     fields = dict(output.fields or {})
     if not config.include_text_lines():
@@ -115,7 +131,8 @@ def _fill_from_second_reader(result: dict, images: list[bytes], engine_name: str
     try:
         from .engines.tesseract_text import read_text_lines
         with timing.step("secondCardReader"):
-            second = parse_gcc_id(read_text_lines(images))
+            # One reading of the page always runs; the further readings (another scale, later images) only while time is left.
+            second = parse_gcc_id(read_text_lines(images, budget_seconds=config.second_card_reader_seconds() or None))
     except Exception as exc:  # noqa: BLE001 - the second reader is a bonus; its absence must not break the first reading
         log.warning("second card reader failed: %s at %s", type(exc).__name__, where(exc))
         return result
@@ -281,6 +298,12 @@ def _run(images: list[bytes], hint: str | None, applicant: Applicant, engine: En
             if small:
                 result["flags"].append({"code": "image_low_resolution", "severity": "warning", "message": small})
         boxes = result["fields"].get("mrzLineBoxes")
+        if _page_cut_off(result.get("document") or {}, boxes, images):
+            # The MRZ is whole, so the reading stands, but most of the page above it is outside the photo: the printed
+            # details and the portrait cannot be checked against it. A person reviews it and the applicant is asked again.
+            result["retake"] = quality.retake(["page_cut_off"])
+            result["flags"].append({"code": "page_cut_off", "severity": "error", "message": quality.MESSAGES["page_cut_off"]})
+            result["needsReview"] = True
         wanted = config.include_text_lines() or bool(config.training_store_dir())   # raw text is personal data
         if wanted and boxes and len(boxes) == len(output.mrz_lines):  # the text as read, for the reviewer to correct
             result["fields"]["mrzLineBoxes"] = [{**b, "text": t} for b, t in zip(boxes, output.mrz_lines)]

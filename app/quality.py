@@ -29,6 +29,8 @@ MESSAGES = {
                  "of letters and '<' (for a card, the side that has them), flat, in focus and in good light, filling the frame.",
     "multiple_documents": "The photo shows more than one document. Take a photo of one document only: the page with the two "
                           "long lines of letters and '<', with no other passport, visa or card in the frame.",
+    "page_cut_off": "Part of the page is outside the photo. Take the photo again with the whole page inside the frame: the "
+                    "photo, the printed details and the two long lines of letters and '<' at the bottom.",
     "too_small": "The image is too small to read. Move closer so the document fills the frame, and take the photo again.",
     "low_contrast": "The print is too faint to read in this photo. Use better light and a plain, darker background, and take "
                     "the photo again.",

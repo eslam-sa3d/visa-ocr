@@ -163,8 +163,9 @@ Whenever the applicant should take the photo again, the response carries a `reta
 | `error.retake`, code `mrz_not_found` or `image_unclear` | Nothing could be read from the photo. | `failed` |
 | `error.retake`, code `multiple_documents` | The photo shows more than one document with machine-readable lines. Nothing is read from it. | `failed` |
 | `result.retake` | An MRZ was read but a check digit fails, or a card's ID number could not be read. The reading is still returned for the reviewer. | `done`, `needsReview: true` |
+| `result.retake`, flag `page_cut_off` | A passport's MRZ was read and its check digits pass, but most of the page above it is outside the photo. The reading is still returned for the reviewer. | `done`, `needsReview: true` |
 
-`retake.reasons` lists why, most serious first: `blurred`, `too_dark`, `too_bright`, `low_contrast`, `too_small`, `mrz_unclear`, `card_unclear`, `not_found`. A reading whose check digits all pass never carries `retake`, however the photo looks.
+`retake.reasons` lists why, most serious first: `blurred`, `too_dark`, `too_bright`, `low_contrast`, `too_small`, `mrz_unclear`, `card_unclear`, `not_found`, `page_cut_off`. A reading whose check digits all pass carries `retake` only for a cut-off page, however the photo looks.
 
 Unusable photo, refused on the upload call (`POST /v1/documents/extract` answers HTTP 422, no job is created):
 

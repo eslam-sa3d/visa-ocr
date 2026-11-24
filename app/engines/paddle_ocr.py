@@ -166,6 +166,8 @@ class SharedReader:
         def read(lang, rec):
             with timing.step("paddle.read:" + lang):
                 return list(rec.predict(crops))
+        if len(self.recognisers) > 1 and "en" in self.recognisers and config.paddle_one_language():
+            return self._read_once(crops, read)
         if len(self.recognisers) < 2 or not config.paddle_parallel_languages():
             return {lang: read(lang, rec) for lang, rec in self.recognisers.items()}
         import contextvars
@@ -173,6 +175,26 @@ class SharedReader:
         with timing.step("paddle.readAllLanguages"), ThreadPoolExecutor(max_workers=len(self.recognisers)) as pool:
             jobs = {lang: pool.submit(contextvars.copy_context().run, read, lang, rec) for lang, rec in self.recognisers.items()}
             return {lang: job.result() for lang, job in jobs.items()}
+
+    def _read_once(self, crops: list, read) -> dict:
+        """Each box read in one language where that is enough. Every box is read in English first. A box of Latin print
+        (an MRZ, a name, a number, a date) comes back with a high score and is not read again; only the boxes English
+        could not read well, which is what Arabic print looks like to it, go to the other recognisers. A passport page is
+        then read about once instead of twice, and a card about one and a half times."""
+        first = read("en", self.recognisers["en"])
+        floor = config.paddle_one_language_score()
+        again = [i for i, res in enumerate(first) if _score_of(res) < floor]
+        out = {"en": first}
+        for lang, rec in self.recognisers.items():
+            if lang == "en":
+                continue
+            results: list = [None] * len(crops)                      # None = not read in this language
+            if again:
+                with timing.step("paddle.read:" + lang):
+                    for i, res in zip(again, rec.predict([crops[i] for i in again])):
+                        results[i] = res
+            out[lang] = results
+        return out
 
     def _recognise(self, kept: list, crops: list, index: int) -> list[dict]:
         lines: list[dict] = []
@@ -182,6 +204,8 @@ class SharedReader:
             if len(results) != len(crops):
                 raise RuntimeError("the recogniser did not answer for every text box")
             for poly, res in zip(kept, results):
+                if res is None:
+                    continue
                 d = _result_dict(res)
                 text = d.get("rec_text", "")
                 text = str(text[0] if isinstance(text, (list, tuple)) and text else text)
@@ -193,6 +217,14 @@ class SharedReader:
                               "script": script_of(text), "score": round(float(score), 4) if score is not None else None,
                               "box": [[int(x), int(y)] for x, y in (poly.tolist() if hasattr(poly, "tolist") else poly)]})
         return lines
+
+
+def _score_of(res) -> float:
+    d = _result_dict(res)
+    text, score = d.get("rec_text", ""), d.get("rec_score")
+    text = str(text[0] if isinstance(text, (list, tuple)) and text else text)
+    score = score[0] if isinstance(score, (list, tuple)) and score else score
+    return float(score) if text.strip() and score is not None else 0.0
 
 
 class PaddleOcrEngine:
@@ -293,12 +325,13 @@ class PaddleOcrEngine:
         used: dict[str, dict] = {}
         recs = {}
         # enable_mkldnn=False as in the usual path: oneDNN fails on some x86 CPU builds (seen with these very models)
+        threads = {"cpu_threads": config.paddle_cpu_threads()} if config.paddle_cpu_threads() else {}     # a reader's share
         detector = TextDetection(model_name=det.architecture(), model_dir=str(self.registry.full_path(det)), enable_mkldnn=False,
-                                 **PIPELINE_DETECTION)
+                                 **PIPELINE_DETECTION, **threads)
         for lang in self.langs:
             rec = self._checked("text_recognition", lang)
             recs[lang] = TextRecognition(model_name=rec.architecture(), model_dir=str(self.registry.full_path(rec)),
-                                         enable_mkldnn=False)
+                                         enable_mkldnn=False, **threads)
             used[lang] = {"id": rec.id, "version": rec.version, "detector": det.id}
         return SharedReader(detector, recs, CropByPolys(det_box_type="quad"), SortQuadBoxes()), used
 

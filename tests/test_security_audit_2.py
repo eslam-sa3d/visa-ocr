@@ -148,7 +148,7 @@ def test_text_reader_stops_at_its_budget_and_caps_rereads(monkeypatch):
 def test_ensemble_card_text_is_not_read_twice(monkeypatch):
     from app import pipeline
     from app.engines import tesseract_text
-    monkeypatch.setattr(tesseract_text, "read_text_lines", lambda images: pytest.fail("second text read"))
+    monkeypatch.setattr(tesseract_text, "read_text_lines", lambda images, **kw: pytest.fail("second text read"))
     result = parse_gcc_id([L("Iqama No: " + good_id(), 10)])
     assert pipeline._fill_from_second_reader(result, [b""], "ensemble") is result
 
@@ -335,7 +335,7 @@ def test_filled_expiry_is_checked_under_auto_accept(monkeypatch, second_line, sc
     monkeypatch.setenv("VISUAL_ZONE_AUTO_ACCEPT", "1")
     idn = good_id()
     first = [L("Iqama No: " + idn, 10), L("Name: AHMED ALI HASSAN", 40), L("Nationality: Egypt", 70), L("Date of Birth: 1990/05/05", 100)]
-    monkeypatch.setattr(tesseract_text, "read_text_lines", lambda images: first + [L(second_line, 130, score)])
+    monkeypatch.setattr(tesseract_text, "read_text_lines", lambda images, **kw: first + [L(second_line, 130, score)])
     result = pipeline._fill_from_second_reader(parse_gcc_id(first), [b""], "paddle-ocr")
     by_code = {f["code"]: f["severity"] for f in result["flags"]}
     assert result["document"].get("expiryDate") and by_code.get(expected) == "error"
