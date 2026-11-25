@@ -38,7 +38,9 @@ flowchart LR
 
 ## 2. How one read works
 
-1. **Upload.** `POST /v1/documents/extract` with 1 to 4 JPEG or PNG images. The API checks the key, the rate limit,
+1. **Upload.** `POST /v1/documents/extract` with 1 to 4 JPEG or PNG images, or PDFs. A PDF is scanned as uploaded, then
+   drawn page by page in a separate process with its own memory, CPU and time limits (`app/pdf.py`); only the page images
+   go further, and the PDF itself is never queued or stored. The API checks the key, the rate limit,
    size, type (by content, not by label), pixel count and shape.
 2. **Reduce.** A photo larger than `WORK_MAX_SIDE` (2000 pixels) is turned upright and reduced. A 12-megapixel phone
    photo otherwise takes about five times longer and four times the memory.

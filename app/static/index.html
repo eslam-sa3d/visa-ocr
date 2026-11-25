@@ -18,6 +18,7 @@
   #drop.over { border-color:var(--g); background:#eef6f1; }
   #thumbs { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
   #thumbs img { height:90px; border:1px solid var(--line); border-radius:6px; }
+  #thumbs .pdfname { height:90px; display:flex; align-items:center; padding:0 14px; border:1px solid var(--line); border-radius:6px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; }
   select, button, textarea { font:inherit; }
   button { background:var(--g); color:#fff; border:0; border-radius:8px; padding:9px 16px; cursor:pointer; }
@@ -47,9 +48,9 @@
 <main>
   <section class="card">
     <h2>1. Upload a document image</h2>
-    <div id="drop">Drop a JPEG or PNG here, or click to choose<br>
+    <div id="drop">Drop a JPEG, PNG or PDF here, or click to choose<br>
       <span class="muted">Passport data page, visa sticker, or the back of an ID / green card (the side with the two or three lines of &lt;&lt;&lt;)</span></div>
-    <input id="file" type="file" accept="image/jpeg,image/png" hidden>
+    <input id="file" type="file" accept="image/jpeg,image/png,application/pdf,.pdf" hidden>
     <div id="thumbs"></div>
     <div class="row">
       <label for="mode">Check</label>
@@ -129,11 +130,13 @@ const LABELS = [
 const CHECKS = { document_number: "Document number", birth_date: "Date of birth", expiry_date: "Expiry date", optional_data: "Optional data", composite: "Whole-line check", id_number: "ID number check digit" };
 
 function setFiles(list) {
-  files = [...list].filter((f) => f.type === "image/jpeg" || f.type === "image/png").slice(0, 1);      // one image per read
+  const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+  files = [...list].filter((f) => f.type === "image/jpeg" || f.type === "image/png" || isPdf(f)).slice(0, 1);      // one file per read
   const thumbs = $("#thumbs"); thumbs.replaceChildren();
-  files.forEach((f) => thumbs.append(el("img", { src: URL.createObjectURL(f), alt: f.name })));
+  files.forEach((f) => thumbs.append(isPdf(f) ? el("div", { className: "pdfname" }, "PDF: " + f.name)
+                                              : el("img", { src: URL.createObjectURL(f), alt: f.name })));
   $("#go").disabled = files.length === 0;
-  $("#status").textContent = list.length && !files.length ? "Only JPEG and PNG are accepted (iPhone HEIC photos must be exported as JPEG first)." : "";
+  $("#status").textContent = list.length && !files.length ? "Only JPEG, PNG and PDF are accepted (iPhone HEIC photos must be exported as JPEG first)." : "";
 }
 
 const drop = $("#drop");

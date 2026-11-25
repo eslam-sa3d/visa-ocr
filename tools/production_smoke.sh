@@ -43,14 +43,14 @@ for _ in range(120):
         time.sleep(1)
 else:
     raise SystemExit("FAIL: the service did not become ready in the production set-up")
-def upload(image):
+def upload(image, name="s.png", ctype="image/png"):
     b = uuid.uuid4().hex
-    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"s.png\"\r\nContent-Type: image/png\r\n\r\n").encode() + image + f"\r\n--{b}--\r\n".encode()
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n").encode() + image + f"\r\n--{b}--\r\n".encode()
     return body, {"Content-Type": f"multipart/form-data; boundary={b}"}
 def read(image):
     return read_at("/v1/documents/extract", image)
-def read_at(path, image):
-    body, h = upload(image)
+def read_at(path, image, name="s.png", ctype="image/png"):
+    body, h = upload(image, name, ctype)
     status, j = call(path, body, {**h, **key})
     if status == 422 and (j.get("detail") or {}).get("code") == "image_unclear":
         return {"status": "failed", "error": j["detail"], "refusedAtUpload": True}     # refused at once, no job
@@ -79,10 +79,13 @@ pstatus, pverdict = call("/v1/photos/check", pbody, {"Content-Type": f"multipart
 # a blank page is refused and the face detector ran and found none (a missing detector answers 503, not a count)
 photo_ok = pstatus == 200 and pverdict.get("acceptable") is False and (pverdict.get("measures") or {}).get("faces") == 0
 pjob = read_at("/v1/passports/extract", sample)   # passport-only endpoint reads the sample passport
+pdf = io.BytesIO(); Image.open(io.BytesIO(sample)).convert("RGB").save(pdf, "PDF", resolution=300)
+pdfjob = read_at("/v1/documents/extract", pdf.getvalue(), "s.pdf", "application/pdf")   # drawn in its own limited process
+pdf_ok = pdfjob.get("status") == "done" and ((pdfjob.get("result") or {}).get("document") or {}).get("format") == ((done.get("result") or {}).get("document") or {}).get("format")
 readers = call("/readyz")[1].get("readers")
-print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| passport endpoint:", pjob.get("status"), "| photo check:", "ok" if photo_ok else f"FAILED ({pstatus})", "| blank photo:", (turned_back.get("error") or {}).get("code"),
+print("status:", done["status"], "| engine:", (done.get("result") or {}).get("engine"), "| readers:", readers, "| passport endpoint:", pjob.get("status"), "| pdf upload:", "ok" if pdf_ok else f"FAILED ({pdfjob.get('status')}, {(pdfjob.get('error') or {}).get('code')})", "| photo check:", "ok" if photo_ok else f"FAILED ({pstatus})", "| blank photo:", (turned_back.get("error") or {}).get("code"),
       "| retake message:", bool(retake), "| stored encrypted:", sealed and not plain, "| audit lines:", audit)
-ok = readers == 2 and photo_ok and pjob.get("status") == "done" and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
+ok = readers == 2 and photo_ok and pdf_ok and pjob.get("status") == "done" and done["status"] == "done" and turned_back["status"] == "failed" and retake and sealed and not plain and audit > 0
 raise SystemExit(0 if ok else "FAIL: see the line above")
 PY
 )" || { echo "$OUT"; exit 1; }      # the line that says which check failed is shown before the build stops

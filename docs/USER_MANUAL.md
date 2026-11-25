@@ -91,7 +91,7 @@ Worker counts and server sizes are in `SERVER_SIZING.md`.
 
 Open `https://<server>/ui`.
 
-1. Drop the photo (JPEG or PNG, up to 10 MB, up to 4 images).
+1. Drop the photo or scan (JPEG, PNG or PDF, up to 10 MB, up to 4 images; a PDF of up to 2 pages).
 2. Choose the document type. "Not sure" works for documents with an MRZ.
 3. Optional: enter the declared nationality and the applicant's details. The reader compares them with the document.
 4. If the server asks for a key, paste it under "API key".
@@ -179,7 +179,12 @@ Examples of each are in `docs/API_EXAMPLES.md`.
 | `JOB_DB_PATH` | none | SQLite file for one machine (Docker sets `/data/jobs.db`) |
 | `MAX_PENDING_JOBS` | 32 | Uploads are refused with "busy" beyond this |
 | `RATE_LIMIT_PER_MIN` | 60 | Per client. 0 turns it off |
-| `MAX_UPLOAD_BYTES` | 10 MB | Per image |
+| `MAX_UPLOAD_BYTES` | 10 MB | Per file (image or PDF) |
+| `MAX_PDF_PAGES` | 2 | Pages a PDF may have; each page counts as one image toward `MAX_FILES` |
+| `PDF_DPI` | 300 | Resolution a PDF page with text is drawn at. A scanned page (one image filling the page) is drawn at the scan's own resolution, pixel for pixel |
+| `PDF_MAX_SIDE` | 4000 | Longest side of a drawn page, in pixels |
+| `PDF_RENDER_SECONDS` | 15 | CPU seconds one PDF may take to draw, in its own process |
+| `PDF_RENDER_MEMORY_MB` | 768 | Memory the PDF drawing process may use |
 | `JOB_TTL_MINUTES` | 60 | How long results are kept |
 | `READER_PROCESSES` | one per core, 2 GB each | Documents read at the same time. Unset: the service reads the container's own core and memory limits at start-up and starts that many readers (each a separate process with its own copy of the models). `/readyz` shows the number. Set a number to force it |
 | `READER_MEMORY_GB` | 2 | Memory counted for each reader when the number is worked out |
@@ -217,7 +222,8 @@ Line crops and label files made for a training run are deleted when the run ends
 |---|---|---|
 | Container exits: `no API key is configured` | `API_KEYS` not set | Set it, or `ALLOW_ANONYMOUS=1` for a local test |
 | Container exits: `... is a directory, not a file` | A mounted certificate path does not exist on the host | Mount the folder that holds `server.crt` and `server.key` |
-| `415 type_mismatch` or `bad_type` | The file is not a real JPEG or PNG | Convert it (HEIC and PDF are not accepted) |
+| `415 type_mismatch` or `bad_type` | The file is not a real JPEG, PNG or PDF | Convert it (HEIC is not accepted) |
+| `415 bad_pdf`, `pdf_encrypted`, `pdf_too_complex`; `422 pdf_too_many_pages` | The PDF cannot be opened, has a password, is too heavy to draw, or has more than `MAX_PDF_PAGES` pages | Send a plain scan without a password, one page per side, or a photo |
 | `413 too_large` | Image over 10 MB | Reduce it or raise `MAX_UPLOAD_BYTES` |
 | `503 busy` | Too many jobs waiting | With PostgreSQL: add workers or raise `MAX_PENDING_JOBS`. One container: give it more cores and memory (it starts more readers), or raise `MAX_PENDING_JOBS` (default: 32 for each reader) |
 | Service does not start: `contains no usable key` | `API_KEYS` holds only commas or spaces | Set a real key. A blank value no longer turns authentication off |

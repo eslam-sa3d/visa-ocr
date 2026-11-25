@@ -46,7 +46,7 @@ Docker: `docker build --build-arg VARIANT=lite -t visa-ocr:lite .` (small, no Pa
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/documents/extract` | Upload 1 to 4 JPEG or PNG images; returns a job id |
+| `POST /v1/documents/extract` | Upload 1 to 4 JPEG or PNG images or PDFs (up to 2 pages each); returns a job id |
 | `GET /v1/jobs/{id}` | Status, fields, checks, flags, `needsReview` |
 | `POST /v1/mrz/parse` | Check MRZ text you already have |
 | `POST /v1/jobs/{id}/corrections` | Reviewer corrections (with applicant consent) |

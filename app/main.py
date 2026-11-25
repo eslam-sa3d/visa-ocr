@@ -31,14 +31,14 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import audit, config, crypto, photo, pipeline, readers, security, training_store, worker, quality
+from . import audit, config, crypto, pdf, photo, pipeline, readers, security, training_store, worker, quality
 from .engines import get_engine
 from .jobs import make_store
 from .model_registry import ManifestError, Registry
 from .mrz import MrzError
 from .review import Applicant, compare_applicant
 from .training_store import TrainingStore
-from .uploads import scan_for_malware, shrink_for_ocr, validate_image
+from .uploads import UploadError, scan_for_malware, shrink_for_ocr, validate_image
 
 log = logging.getLogger("visa-ocr")
 
@@ -281,6 +281,26 @@ def _decode_slots() -> asyncio.Semaphore:
     return _shrink_slots
 
 
+async def _upload_images(data: bytes, claimed_type: str | None, first_page_only: bool = False) -> list[bytes]:
+    """The image(s) in one uploaded file. A JPEG or PNG is itself. A PDF is checked by the malware scanner as it came, then
+    drawn page by page in a separate, limited process (app/pdf.py); the PDF itself goes no further. Every page image then
+    passes validate_image like any upload. Raises UploadError."""
+    if not pdf.is_pdf(data):
+        validate_image(data, claimed_type)
+        return [data]
+    if len(data) > config.max_bytes():
+        raise UploadError(413, "too_large", f"File exceeds {config.max_bytes() // (1024 * 1024)} MB")
+    await run_in_threadpool(scan_for_malware, data)             # the PDF as uploaded, before anything opens it
+    try:
+        async with _decode_slots():
+            pages = await run_in_threadpool(pdf.render, data, first_page_only)
+    except pdf.PdfError as exc:
+        raise UploadError(422 if exc.code in ("pdf_too_many_pages", "pdf_empty") else 415, exc.code, exc.message) from None
+    for page in pages:
+        validate_image(page, "image/jpeg")
+    return pages
+
+
 def _process(job_id: str, images: list[bytes], hint: str | None, applicant: Applicant) -> None:
     try:
         worker.process_job(store, job_id, images, hint, applicant, lambda: get_engine())   # looked up per call (tests patch it)
@@ -297,7 +317,7 @@ async def check_image(request: Request, file: UploadFile = File(...), owner: str
     security.limiter.check(security.client_id(request, owner))
     security.allow(request, "upload", owner)
     data = await file.read(config.max_bytes() + 1)
-    validate_image(data, file.content_type)
+    data = (await _upload_images(data, file.content_type, first_page_only=True))[0]
     async with _decode_slots():
         q = await run_in_threadpool(quality.measure, data)
     reasons = q.issues or q.doubts
@@ -334,10 +354,16 @@ async def extract(
         images: list[bytes] = []
         for f in files:
             data = await f.read(config.max_bytes() + 1)
-            validate_image(data, f.content_type)
-            await run_in_threadpool(scan_for_malware, data)        # only when UPLOAD_SCAN_COMMAND is set
-            async with _decode_slots():            # decode and resize off the event loop
-                images.append(await run_in_threadpool(shrink_for_ocr, data))   # queue, readers and training store get this image
+            was_pdf = pdf.is_pdf(data)
+            pages = await _upload_images(data, f.content_type)    # a PDF becomes one image per page
+            if len(images) + len(pages) > config.max_files():
+                raise HTTPException(422, {"code": "bad_file_count",
+                                          "message": f"Send at most {config.max_files()} images in total (each PDF page counts as one)"})
+            for page in pages:
+                if not was_pdf:
+                    await run_in_threadpool(scan_for_malware, page)    # only when UPLOAD_SCAN_COMMAND is set
+                async with _decode_slots():        # decode and resize off the event loop
+                    images.append(await run_in_threadpool(shrink_for_ocr, page))   # queue, readers and training store get this image
         if config.refuse_unclear_at_upload():
             # Measured from the pixels in a fraction of a second: an unusable photo is answered now, not when its turn comes.
             clarity = await run_in_threadpool(quality.clearest, images)
@@ -428,7 +454,7 @@ async def check_photo(request: Request, file: UploadFile = File(...), owner: str
     security.limiter.check(security.client_id(request, owner))
     security.allow(request, "upload", owner)
     data = await file.read(config.max_bytes() + 1)
-    validate_image(data, file.content_type)
+    data = (await _upload_images(data, file.content_type, first_page_only=True))[0]
     try:
         async with _decode_slots():
             verdict = await run_in_threadpool(photo.check, data)

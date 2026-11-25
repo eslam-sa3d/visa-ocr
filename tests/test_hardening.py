@@ -222,7 +222,7 @@ def post_file(data, ctype="image/png"):
 
 @pytest.mark.parametrize("data,ctype,status,code", [
     (b"hello world, not an image" * 20, "image/png", 415, "type_mismatch"),
-    (b"%PDF-1.4 " + b"0" * 500, "image/jpeg", 415, "type_mismatch"),
+    (b"%PDF-1.4 " + b"0" * 500, "image/jpeg", 415, "bad_pdf"),      # a broken PDF: refused as one
     (b"GIF89a" + b"0" * 100, "image/gif", 415, "bad_type"),
     (b"\x89PNG\r\n\x1a\n" + b"garbage" * 50, "image/png", 422, "invalid_image"),
     (None, "image/png", 422, "image_too_small"),                     # replaced below with a real tiny image

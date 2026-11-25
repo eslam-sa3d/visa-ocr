@@ -2060,7 +2060,9 @@ pypdfium2==5.15.2 \
     --hash=sha256:f4d422d2662bf0be37118abb14dbac6acc3bfbc04a82da92cb200b570ee24da2 \
     --hash=sha256:fddd832b17f11cae080c395530eed01da0c003c66d6c233ba656e93ddf570ee0 \
     --hash=sha256:fe64472c32d0717669c99758ce234066500b0234730dad0327248f09399e9736
-    # via paddlex
+    # via
+    #   -r requirements.txt
+    #   paddlex
 pytesseract==0.3.13 \
     --hash=sha256:4bf5f880c99406f52a3cfc2633e42d9dc67615e69d8a509d74867d3baddb5db9 \
     --hash=sha256:7a99c6c2ac598360693d83a416e36e0b33a67638bb9d77fdcac094a3589d4b34

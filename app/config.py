@@ -221,3 +221,27 @@ def training_min_free_bytes() -> int:
     """New training writes (corrections, consented images) stop while the store's volume has less free space than this."""
     return max(0, _int("TRAINING_MIN_FREE_BYTES", 2 * 1024 ** 3))
 
+
+def max_pdf_pages() -> int:
+    """Pages a PDF may have; each page counts as one image toward MAX_FILES. One page per side of the document."""
+    return max(1, _int("MAX_PDF_PAGES", 2))
+
+
+def pdf_dpi() -> int:
+    """Resolution a PDF page is drawn at: 300 dots per inch keeps an MRZ as sharp as a good scan."""
+    return min(600, max(72, _int("PDF_DPI", 300)))
+
+
+def pdf_max_side() -> int:
+    return max(500, _int("PDF_MAX_SIDE", 4000))
+
+
+def pdf_render_seconds() -> int:
+    """CPU seconds one PDF may take to draw, in its own process."""
+    return min(120, max(2, _int("PDF_RENDER_SECONDS", 15)))
+
+
+def pdf_render_memory_mb() -> int:
+    """Memory the PDF drawing process may use."""
+    return min(4096, max(256, _int("PDF_RENDER_MEMORY_MB", 768)))
+

@@ -27,7 +27,7 @@ def validate_image(data: bytes, claimed_type: str | None) -> tuple[int, int]:
     if sniffed is None:
         if claimed_type in _MAGIC:
             raise UploadError(415, "type_mismatch", "The file content is not the image type it claims to be")
-        raise UploadError(415, "bad_type", "Only JPEG and PNG images are accepted")
+        raise UploadError(415, "bad_type", "Only JPEG, PNG and PDF files are accepted")
     try:
         with Image.open(io.BytesIO(data)) as img:     # reads the header only, does not decode pixels
             width, height = img.size
