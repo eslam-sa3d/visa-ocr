@@ -150,3 +150,14 @@ def test_other_formats_are_still_refused(client):
     Image.new("RGB", (400, 300), "white").save(out, "GIF")
     r = client.post("/v1/documents/extract", files=[("files", ("a.gif", out.getvalue(), "image/gif"))])
     assert r.status_code == 415 and "PDF" in r.json()["detail"]["message"]
+
+
+def test_review_everything_sends_every_finished_result_to_a_person(client, monkeypatch):
+    r = client.post("/v1/documents/extract", files=[("files", ("p.png", _png(), "image/png"))],
+                    data={"expected_surname": "ERIKSSON", "expected_given_names": "ANNA MARIA"})
+    assert "review_everything" not in [f["code"] for f in client.get("/v1/jobs/" + r.json()["jobId"]).json()["result"]["flags"]]
+    monkeypatch.setenv("REVIEW_EVERYTHING", "1")
+    r = client.post("/v1/documents/extract", files=[("files", ("p.png", _png(), "image/png"))],
+                    data={"expected_surname": "ERIKSSON", "expected_given_names": "ANNA MARIA"})
+    res = client.get("/v1/jobs/" + r.json()["jobId"]).json()["result"]
+    assert res["needsReview"] is True and "review_everything" in [f["code"] for f in res["flags"]]

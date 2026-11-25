@@ -180,6 +180,7 @@ Examples of each are in `docs/API_EXAMPLES.md`.
 | `MAX_PENDING_JOBS` | 32 | Uploads are refused with "busy" beyond this |
 | `RATE_LIMIT_PER_MIN` | 60 | Per client. 0 turns it off |
 | `MAX_UPLOAD_BYTES` | 10 MB | Per file (image or PDF) |
+| `REVIEW_EVERYTHING` | off (on in `deploy/production/visa-ocr.env`) | `1`: every finished result has `needsReview: true` with the flag `review_everything`, for the supervised pilot. Remove for full go-live after sign-off |
 | `MAX_PDF_PAGES` | 2 | Pages a PDF may have; each page counts as one image toward `MAX_FILES` |
 | `PDF_DPI` | 300 | Resolution a PDF page with text is drawn at. A scanned page (one image filling the page) is drawn at the scan's own resolution, pixel for pixel |
 | `PDF_MAX_SIDE` | 4000 | Longest side of a drawn page, in pixels |

@@ -226,6 +226,12 @@ def run(images: list[bytes], hint: str | None, applicant: Applicant, engine: Eng
         status, result = _run(images, hint, applicant, engine)
     if status == "done" and isinstance(result, dict):
         result["timings"] = {**steps, "total": round(time.monotonic() - started, 2)}
+        if config.review_everything():
+            # Pilot: every result goes to a person, whatever the readers concluded. The flag says why, so the portal and the
+            # pilot figures can tell "the service was sure" (no other error flag) from "the service had doubts".
+            result["needsReview"] = True
+            result.setdefault("flags", []).append({"code": "review_everything", "severity": "error",
+                                                   "message": "Pilot: every result is checked by a person (REVIEW_EVERYTHING=1)"})
     return status, result
 
 

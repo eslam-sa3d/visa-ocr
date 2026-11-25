@@ -245,3 +245,8 @@ def pdf_render_memory_mb() -> int:
     """Memory the PDF drawing process may use."""
     return min(4096, max(256, _int("PDF_RENDER_MEMORY_MB", 768)))
 
+
+def review_everything() -> bool:
+    """REVIEW_EVERYTHING=1: every finished result has needsReview true, with the flag review_everything (supervised pilot)."""
+    return _flag("REVIEW_EVERYTHING")
+
